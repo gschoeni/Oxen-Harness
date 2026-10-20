@@ -106,10 +106,6 @@ export function SkillsPage() {
     await reloadThen({ kind: "edit", ...id });
   }
 
-  async function rename(skill: SkillInfo, to: SkillIdentity) {
-    await renameSkill(skill.scope, skill.name, to.scope, to.name);
-    await reloadThen({ kind: "edit", ...to });
-  }
 
   async function importFrom(scope: SkillScope, path: string) {
     const name = await importSkill(scope, path);
@@ -146,7 +142,8 @@ export function SkillsPage() {
         <SkillEditor
           skill={skill}
           tools={tools}
-          onRename={(to) => rename(skill, to)}
+          onRename={(to) => renameSkill(skill.scope, skill.name, to.scope, to.name)}
+          onMoved={(to) => reloadThen({ kind: "edit", ...to })}
           onDone={() => reloadThen({ kind: "show", name: skill.name, scope: skill.scope })}
           onDelete={() => remove(skill)}
         />
@@ -572,12 +569,16 @@ function SkillEditor({
   skill,
   tools,
   onRename,
+  onMoved,
   onDone,
   onDelete,
 }: {
   skill: SkillInfo;
   tools: ToolInfo[];
+  /** Move the skill on disk. */
   onRename: (to: SkillIdentity) => Promise<void>;
+  /** Show the skill at its new home, once it has moved. */
+  onMoved: (to: SkillIdentity) => Promise<void>;
   onDone: () => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
@@ -604,18 +605,9 @@ function SkillEditor({
     autosave.schedule(next);
   }
 
-  // Each action below first writes pending typing; a failed save (already
-  // shown in the status line) keeps the user here rather than leaving with
-  // work unsaved.
   async function act(job: () => Promise<void>) {
     setError(null);
     setBusy(true);
-    try {
-      await autosave.flush();
-    } catch {
-      setBusy(false);
-      return;
-    }
     try {
       await job();
     } catch (e) {
@@ -625,18 +617,36 @@ function SkillEditor({
     }
   }
 
-  const done = () => act(onDone);
+  // Leaving and renaming first write pending typing. A failed save (already
+  // shown in the status line) keeps the user here rather than leaving with
+  // work unsaved, so it isn't reported twice.
+  const flushThen = (job: () => Promise<void>) =>
+    act(async () => {
+      try {
+        await autosave.flush();
+      } catch {
+        return;
+      }
+      await job();
+    });
+
+  const done = () => flushThen(onDone);
 
   const applyRename = (to: SkillIdentity) =>
-    act(() =>
-      autosave.run(async () => {
-        const next = { ...to, name: to.name.trim() };
+    flushThen(async () => {
+      const next = { ...to, name: to.name.trim() };
+      // Point saves at the new home the moment the move lands, inside the
+      // queue, so even if the reload below fails no save recreates the old one.
+      await autosave.run(async () => {
         await onRename(next);
         target.current = next;
-        setRenaming(null);
-      }),
-    );
+      });
+      setRenaming(null);
+      await onMoved(next);
+    });
 
+  // Deleting doesn't need the typing saved (and must work when saves fail).
+  // Queued behind any save in flight, then nothing more is written.
   const reallyDelete = () =>
     act(() =>
       autosave.run(async () => {

@@ -410,6 +410,48 @@ describe("SkillsPage", () => {
     expect(await screen.findByText("/Downloads/release-notes.zip")).toBeInTheDocument();
   });
 
+  it("deletes a skill even while its saves are failing", async () => {
+    ipc.saveSkill.mockRejectedValue("disk full");
+    render(<SkillsPage />);
+    await editSkill("review-checklist");
+    await userEvent.type(screen.getByLabelText("Instructions markdown"), "!");
+    await userEvent.tab();
+    expect(await screen.findByText("Couldn't save: disk full")).toBeInTheDocument();
+
+    ipc.listSkills.mockResolvedValue([releaseNotes]);
+    await userEvent.click(screen.getByRole("button", { name: /delete skill/i }));
+    await userEvent.click(screen.getByRole("button", { name: /really delete/i }));
+    await waitFor(() =>
+      expect(ipc.deleteSkill).toHaveBeenCalledWith("project", "review-checklist"),
+    );
+    expect(await screen.findByRole("button", { name: /new skill/i })).toBeInTheDocument();
+  });
+
+  it("saves to the new home even when the list fails to reload after a rename", async () => {
+    render(<SkillsPage />);
+    await editSkill("release-notes");
+    await userEvent.click(screen.getByRole("button", { name: /rename or move/i }));
+    const form = screen.getByRole("form", { name: "Rename or move skill" });
+    const name = within(form).getByDisplayValue("release-notes");
+    await userEvent.clear(name);
+    await userEvent.type(name, "changelog");
+
+    ipc.listSkills.mockRejectedValueOnce("listing failed");
+    await userEvent.click(within(form).getByRole("button", { name: "Apply" }));
+    expect(await screen.findByText("listing failed")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Instructions markdown"), "!");
+    await userEvent.tab();
+    await waitFor(() =>
+      expect(ipc.saveSkill).toHaveBeenCalledWith(
+        "global",
+        "changelog",
+        releaseNotes.description,
+        releaseNotes.instructions + "!",
+      ),
+    );
+  });
+
   it("deletes a skill from the editor after a second confirming click, landing on the list", async () => {
     render(<SkillsPage />);
     await editSkill("review-checklist");

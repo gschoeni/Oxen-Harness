@@ -11,6 +11,7 @@
 //! Like tool preferences, changes apply when an agent is built — new and
 //! resumed chats, not the live one.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use harness_config::paths;
@@ -93,19 +94,16 @@ pub fn discover(workspace_root: &Path) -> Vec<Skill> {
 }
 
 /// Build the `skill` tool for a workspace: discovered skills minus disabled
-/// ones and drafts. Returns `None` when nothing is enabled, so hosts don't advertise an
-/// empty tool.
+/// ones and drafts. Returns `None` when nothing is left, so hosts don't
+/// advertise an empty tool.
 pub fn enabled_tool(workspace_root: &Path) -> Option<SkillTool> {
     let prefs = load();
     let skills: Vec<Skill> = discover(workspace_root)
         .into_iter()
-        .filter(|s| prefs.is_enabled(&s.name) && !s.is_draft())
+        .filter(|s| prefs.is_enabled(&s.name))
         .collect();
-    if skills.is_empty() {
-        None
-    } else {
-        Some(SkillTool::new(skills))
-    }
+    let tool = SkillTool::new(skills);
+    (!tool.is_empty()).then_some(tool)
 }
 
 /// One skill as shown on the Skills settings page.
@@ -166,6 +164,12 @@ fn scope_label(scope: SkillScope) -> &'static str {
     }
 }
 
+/// Attach the operation and path to an I/O error, for messages users can act on.
+pub(super) fn io_context(what: &str, path: &Path) -> impl FnOnce(std::io::Error) -> RuntimeError {
+    let message = format!("{what} {}", path.display());
+    move |e| RuntimeError::Io(std::io::Error::new(e.kind(), format!("{message}: {e}")))
+}
+
 /// Where a new skill named `name` would go, refusing to clobber one already
 /// there.
 pub(super) fn vacant_skill_dir(
@@ -213,15 +217,31 @@ pub fn save_skill(
     let instructions = instructions.trim();
 
     let dir = scope_dir(workspace_root, scope)?.join(name);
-    std::fs::create_dir_all(&dir).map_err(RuntimeError::Io)?;
+    write_skill_md(&dir, name, &description, instructions)
+}
+
+/// Write `<dir>/SKILL.md`, keeping the frontmatter keys this harness doesn't
+/// interpret. The write is atomic (temp file + rename): it runs on every
+/// pause in typing, and a crash mid-write mustn't truncate the skill.
+fn write_skill_md(
+    dir: &Path,
+    name: &str,
+    description: &str,
+    instructions: &str,
+) -> Result<(), RuntimeError> {
     let path = dir.join("SKILL.md");
+    std::fs::create_dir_all(dir).map_err(io_context("creating", dir))?;
     let previous = match std::fs::read_to_string(&path) {
         Ok(text) => Some(text),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(RuntimeError::Io(e)),
+        Err(e) => return Err(io_context("reading", &path)(e)),
     };
-    let md = render_skill_md(name, &description, instructions, previous.as_deref());
-    std::fs::write(path, md).map_err(RuntimeError::Io)?;
+    let md = render_skill_md(name, description, instructions, previous.as_deref());
+    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(io_context("writing", &path))?;
+    tmp.write_all(md.as_bytes())
+        .map_err(io_context("writing", &path))?;
+    tmp.persist(&path)
+        .map_err(|e| io_context("writing", &path)(e.error))?;
     Ok(())
 }
 
@@ -240,31 +260,25 @@ pub fn rename_skill(
     }
     check_name(from_name)?;
     let src = scope_dir(workspace_root, from_scope)?.join(from_name);
-    let contents = std::fs::read_to_string(src.join("SKILL.md")).map_err(|e| {
-        RuntimeError::Io(std::io::Error::new(
-            e.kind(),
-            format!("reading skill `{from_name}` at {}: {e}", src.display()),
-        ))
-    })?;
+    let md_path = src.join("SKILL.md");
+    let contents =
+        std::fs::read_to_string(&md_path).map_err(io_context("reading skill", &md_path))?;
     let skill = harness_tools::skill::parse_skill_md(&contents, &src, from_scope)
         .map_err(|e| RuntimeError::Invalid(format!("skill `{from_name}`: {e}")))?;
     let dest = vacant_skill_dir(workspace_root, to_scope, to_name)?;
 
+    // Rename in the frontmatter first, so the move is the only step that can
+    // fail halfway (and the folder name is the identity either way).
+    write_skill_md(&src, to_name, &skill.description, &skill.instructions)?;
     move_dir(&src, &dest)?;
-    // The frontmatter carries the name too; keep it in step with the folder.
-    save_skill(
-        workspace_root,
-        to_scope,
-        to_name,
-        &skill.description,
-        &skill.instructions,
-    )?;
 
     if from_name != to_name {
+        // Preferences are keyed by name alone, so this also re-enables a
+        // same-named skill in the other scope — the name is free either way.
         let mut prefs = load();
-        if !prefs.is_enabled(from_name) {
-            prefs.set_enabled(from_name, true);
-            prefs.set_enabled(to_name, false);
+        let enabled = prefs.is_enabled(from_name);
+        let moved = prefs.set_enabled(from_name, true);
+        if prefs.set_enabled(to_name, enabled) || moved {
             save(&prefs)?;
         }
     }

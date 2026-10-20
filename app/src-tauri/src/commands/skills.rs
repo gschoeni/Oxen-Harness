@@ -20,6 +20,18 @@ pub(crate) async fn list_skills(
     Ok(harness_runtime::skills::list(&root, &prefs))
 }
 
+/// Run skill file work off the async runtime (a rename can copy a whole
+/// folder across volumes; an import unpacks an archive).
+async fn blocking<T: Send + 'static>(
+    what: &str,
+    work: impl FnOnce() -> Result<T, harness_runtime::RuntimeError> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("{what}: {e}"))?
+        .map_err(|e| e.to_string())
+}
+
 /// Start a new (draft) skill. Fails rather than overwrite an existing one.
 #[tauri::command]
 pub(crate) async fn create_skill(
@@ -28,7 +40,10 @@ pub(crate) async fn create_skill(
     name: String,
 ) -> Result<(), String> {
     let root = state.active_root().await;
-    harness_runtime::skills::create_skill(&root, scope, &name).map_err(|e| e.to_string())
+    blocking("creating skill", move || {
+        harness_runtime::skills::create_skill(&root, scope, &name)
+    })
+    .await
 }
 
 /// Rename a skill and/or move it between scopes, supporting files included.
@@ -41,8 +56,10 @@ pub(crate) async fn rename_skill(
     to_name: String,
 ) -> Result<(), String> {
     let root = state.active_root().await;
-    harness_runtime::skills::rename_skill(&root, (from_scope, &from_name), (to_scope, &to_name))
-        .map_err(|e| e.to_string())
+    blocking("renaming skill", move || {
+        harness_runtime::skills::rename_skill(&root, (from_scope, &from_name), (to_scope, &to_name))
+    })
+    .await
 }
 
 /// Create or update a skill's SKILL.md. Takes effect for new/resumed chats.
@@ -55,8 +72,10 @@ pub(crate) async fn save_skill(
     instructions: String,
 ) -> Result<(), String> {
     let root = state.active_root().await;
-    harness_runtime::skills::save_skill(&root, scope, &name, &description, &instructions)
-        .map_err(|e| e.to_string())
+    blocking("saving skill", move || {
+        harness_runtime::skills::save_skill(&root, scope, &name, &description, &instructions)
+    })
+    .await
 }
 
 /// Export a skill's folder to `path` as a zip (the layout claude.ai imports).
@@ -68,12 +87,10 @@ pub(crate) async fn export_skill(
     path: String,
 ) -> Result<(), String> {
     let root = state.active_root().await;
-    tokio::task::spawn_blocking(move || {
+    blocking("exporting skill", move || {
         harness_runtime::skills::archive::export_skill(&root, scope, &name, Path::new(&path))
     })
     .await
-    .map_err(|e| format!("exporting skill: {e}"))?
-    .map_err(|e| e.to_string())
 }
 
 /// Import a skill from a `.zip`, `.skill`, or `SKILL.md` at `path` into
@@ -85,12 +102,10 @@ pub(crate) async fn import_skill(
     path: String,
 ) -> Result<String, String> {
     let root = state.active_root().await;
-    tokio::task::spawn_blocking(move || {
+    blocking("importing skill", move || {
         harness_runtime::skills::archive::import_skill(&root, scope, Path::new(&path))
     })
     .await
-    .map_err(|e| format!("importing skill: {e}"))?
-    .map_err(|e| e.to_string())
 }
 
 /// Delete a skill's directory (SKILL.md plus any supporting files).

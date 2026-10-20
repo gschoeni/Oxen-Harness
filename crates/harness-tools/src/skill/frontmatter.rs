@@ -72,7 +72,9 @@ fn unquote(s: &str) -> String {
 
 /// Split a `SKILL.md` into its frontmatter entries and the markdown body.
 pub fn split(contents: &str) -> Result<(Vec<Entry>, &str), String> {
+    // Windows editors often prepend a byte-order mark.
     let rest = contents
+        .trim_start_matches('\u{feff}')
         .strip_prefix("---")
         .ok_or("SKILL.md must start with `---` frontmatter")?;
     let (block, body) = rest
@@ -172,6 +174,13 @@ mod tests {
             value("description: Plain # comment", "description"),
             "Plain"
         );
+    }
+
+    #[test]
+    fn tolerates_a_byte_order_mark() {
+        let (es, body) = split("\u{feff}---\nname: x\n---\nBody").unwrap();
+        assert_eq!(es[0].scalar(), "x");
+        assert_eq!(body.trim(), "Body");
     }
 
     #[test]

@@ -17,7 +17,7 @@ use harness_tools::skill::{parse_skill_md, SkillScope};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-use super::{check_name, scope_dir, vacant_skill_dir};
+use super::{check_name, io_context, scope_dir, vacant_skill_dir};
 use crate::RuntimeError;
 
 /// Imports larger than this are refused (a skill is instructions and a few
@@ -175,8 +175,9 @@ fn import_markdown(
     let contents = std::fs::read_to_string(src).map_err(|e| read_error(src, e))?;
     let name = skill_name(&contents, &fallback_name(src, None), scope)?;
     let dest = vacant_skill_dir(workspace_root, scope, &name)?;
-    std::fs::create_dir_all(&dest).map_err(RuntimeError::Io)?;
-    std::fs::write(dest.join("SKILL.md"), contents).map_err(RuntimeError::Io)?;
+    std::fs::create_dir_all(&dest).map_err(io_context("creating", &dest))?;
+    let md = dest.join("SKILL.md");
+    std::fs::write(&md, contents).map_err(io_context("writing", &md))?;
     Ok(name)
 }
 
@@ -240,11 +241,11 @@ fn import_zip(
     // Unpack into a hidden staging folder beside the skills, then move it
     // into place in one step, so a failed import leaves nothing half-written.
     let skills_dir = scope_dir(workspace_root, scope)?;
-    std::fs::create_dir_all(&skills_dir).map_err(RuntimeError::Io)?;
+    std::fs::create_dir_all(&skills_dir).map_err(io_context("creating", &skills_dir))?;
     let staging = tempfile::Builder::new()
         .prefix(".import-")
         .tempdir_in(&skills_dir)
-        .map_err(RuntimeError::Io)?;
+        .map_err(io_context("staging the import in", &skills_dir))?;
     let mut budget = MAX_IMPORT_BYTES;
     for (i, path) in paths.iter().enumerate() {
         let Some(rel) = path.as_ref().and_then(|p| p.strip_prefix(root).ok()) else {
@@ -266,13 +267,13 @@ fn import_zip(
         };
         let out = staging.path().join(&rel);
         if entry.is_dir() {
-            std::fs::create_dir_all(&out).map_err(RuntimeError::Io)?;
+            std::fs::create_dir_all(&out).map_err(io_context("creating", &out))?;
             continue;
         }
         if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent).map_err(RuntimeError::Io)?;
+            std::fs::create_dir_all(parent).map_err(io_context("creating", parent))?;
         }
-        let mut file = File::create(&out).map_err(RuntimeError::Io)?;
+        let mut file = File::create(&out).map_err(io_context("writing", &out))?;
         // Read one byte past the budget to tell "exactly fits" from "too big".
         let written = std::io::copy(&mut (&mut entry).take(budget + 1), &mut file)
             .map_err(|e| not_a_skill(format!("{}: {e}", rel.display())))?;
@@ -283,7 +284,7 @@ fn import_zip(
             )));
         }
         budget -= written;
-        file.flush().map_err(RuntimeError::Io)?;
+        file.flush().map_err(io_context("writing", &out))?;
         set_mode(&out, entry.unix_mode())?;
     }
 
@@ -292,7 +293,9 @@ fn import_zip(
     let folder = root.file_name().map(|n| n.to_string_lossy().to_string());
     let name = skill_name(&contents, &fallback_name(src, folder.as_deref()), scope)?;
     let dest = vacant_skill_dir(workspace_root, scope, &name)?;
-    std::fs::rename(staging.path(), &dest).map_err(RuntimeError::Io)?;
+    // On success the staging folder is gone and the TempDir's cleanup finds
+    // nothing; on any error above, dropping it removes the partial unpack.
+    std::fs::rename(staging.path(), &dest).map_err(io_context("installing", &dest))?;
     Ok(name)
 }
 
@@ -302,7 +305,7 @@ fn set_mode(path: &Path, mode: Option<u32>) -> Result<(), RuntimeError> {
     use std::os::unix::fs::PermissionsExt;
     if mode.is_some_and(|m| m & 0o111 != 0) {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-            .map_err(RuntimeError::Io)?;
+            .map_err(io_context("setting permissions on", path))?;
     }
     Ok(())
 }

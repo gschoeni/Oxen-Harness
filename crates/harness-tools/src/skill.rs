@@ -100,8 +100,9 @@ pub fn parse_skill_md(contents: &str, dir: &Path, scope: SkillScope) -> Result<S
     let name = value("name");
     let description = value("description");
 
-    // The directory is the identity; a frontmatter `name` must agree so a
-    // renamed folder can't silently advertise a stale name.
+    // The frontmatter name wins, falling back to the folder. Discovery then
+    // pins installed skills to their folder name (see `load_skills_dir`);
+    // imports use this to name the folder they create.
     let name = name
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| dir_name.clone());
@@ -167,7 +168,16 @@ pub fn load_skills_dir(dir: &Path, scope: SkillScope) -> Vec<Skill> {
         .filter_map(|e| {
             let md = e.path().join("SKILL.md");
             let contents = std::fs::read_to_string(&md).ok()?;
-            parse_skill_md(&contents, &e.path(), scope).ok()
+            let mut skill = parse_skill_md(&contents, &e.path(), scope).ok()?;
+            // The folder is the identity: edits, renames, and the `skill`
+            // tool all address a skill by its folder. A frontmatter `name`
+            // that disagrees (a hand-copied folder) is rewritten on next save.
+            let folder = e.file_name().to_string_lossy().to_string();
+            if !is_valid_skill_name(&folder) {
+                return None;
+            }
+            skill.name = folder;
+            Some(skill)
         })
         .collect();
     skills.sort_by(|a, b| a.name.cmp(&b.name));
@@ -356,6 +366,20 @@ mod tests {
         let skills = load_skills_dir(tmp.path(), SkillScope::Global);
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "good-skill");
+
+        let copied = tmp.path().join("copied");
+        std::fs::create_dir_all(&copied).unwrap();
+        std::fs::write(
+            copied.join("SKILL.md"),
+            "---\nname: original\ndescription: d\n---\nb",
+        )
+        .unwrap();
+        let names: Vec<String> = load_skills_dir(tmp.path(), SkillScope::Global)
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(names, ["copied", "good-skill"]);
+        std::fs::remove_dir_all(&copied).unwrap();
 
         let hidden = tmp.path().join(".import-x");
         std::fs::create_dir_all(&hidden).unwrap();
