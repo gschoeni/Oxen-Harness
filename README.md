@@ -749,6 +749,13 @@ the desktop editor autocompletes and lints. This repo ships
 [`add-a-tool`](.oxen-harness/skills/add-a-tool/SKILL.md), a skill that teaches
 the agent to extend itself with new tools.
 
+Skills share as files. **Export** on a skill's page saves a `<name>.zip`
+holding its folder, the layout claude.ai's "Upload skill" takes; unzipped, it
+drops straight into `~/.codex/skills/` or `.claude/skills/`. **Import skill**
+takes that zip, a `.skill` package, or a lone `SKILL.md`, so a skill written
+for Claude or Codex works here as-is (extra frontmatter such as `license` or
+`allowed-tools` is kept).
+
 ### Rules — catching mistakes as they're written
 
 Some corrections don't belong in the system prompt. "Never use `.unwrap()`

@@ -364,6 +364,52 @@ describe("SkillsPage", () => {
     );
   });
 
+  it("imports a skill file into the chosen scope and opens it", async () => {
+    render(<SkillsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /import skill/i }));
+    await userEvent.click(screen.getByRole("combobox", { name: "Skill scope" }));
+    await userEvent.click(screen.getByRole("option", { name: /^This project only/ }));
+
+    ipc.pickSkillFile.mockResolvedValue("/Downloads/deploy-steps.zip");
+    ipc.importSkill.mockResolvedValue("deploy-steps");
+    const imported = { ...deployDraft, description: "Deploys.", instructions: "Run it.", draft: false };
+    ipc.listSkills.mockResolvedValue([imported, releaseNotes]);
+    await userEvent.click(screen.getByRole("button", { name: /choose file/i }));
+
+    expect(ipc.importSkill).toHaveBeenCalledWith("project", "/Downloads/deploy-steps.zip");
+    expect(await screen.findByText("Run it.")).toBeInTheDocument();
+  });
+
+  it("stays on the import screen when the picker is cancelled or the file is rejected", async () => {
+    render(<SkillsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /import skill/i }));
+
+    await userEvent.click(screen.getByRole("button", { name: /choose file/i }));
+    expect(ipc.importSkill).not.toHaveBeenCalled();
+
+    ipc.pickSkillFile.mockResolvedValue("/Downloads/notes.zip");
+    ipc.importSkill.mockRejectedValue("notes.zip isn't a skill archive: no SKILL.md inside");
+    await userEvent.click(screen.getByRole("button", { name: /choose file/i }));
+    expect(await screen.findByText(/no SKILL.md inside/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /choose file/i })).toBeEnabled();
+  });
+
+  it("exports a skill as a zip from its reading view", async () => {
+    render(<SkillsPage />);
+    await openSkill("release-notes");
+
+    ipc.pickSkillExportPath.mockResolvedValue("/Downloads/release-notes.zip");
+    await userEvent.click(screen.getByRole("button", { name: /export/i }));
+
+    expect(ipc.pickSkillExportPath).toHaveBeenCalledWith("release-notes");
+    expect(ipc.exportSkill).toHaveBeenCalledWith(
+      "global",
+      "release-notes",
+      "/Downloads/release-notes.zip",
+    );
+    expect(await screen.findByText("/Downloads/release-notes.zip")).toBeInTheDocument();
+  });
+
   it("deletes a skill from the editor after a second confirming click, landing on the list", async () => {
     render(<SkillsPage />);
     await editSkill("review-checklist");

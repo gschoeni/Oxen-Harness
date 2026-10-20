@@ -1665,3 +1665,27 @@ half-written skill can't misfire. `create_skill` and `rename_skill` refuse to
 overwrite an existing skill. Saves run one at a time, in order, and rename
 and delete wait in the same queue, so no save can land in a folder after it
 has moved or been deleted.
+
+## Skills share as claude.ai-shaped zips (2026-10-20)
+
+**Decision:** export writes `<name>.zip` with one top-level `<name>/` folder
+holding `SKILL.md` and its supporting files, which is the layout claude.ai's
+"Upload skill" takes. Import takes that zip, a `.skill` package (a zip that
+often has `SKILL.md` at its root), or a lone `SKILL.md`. Codex and Claude Code
+keep skills as the same folder (`~/.codex/skills/<name>/`,
+`.claude/skills/<name>/`), so one archive works with all of them and no
+format is ours alone.
+
+**Compatibility:** frontmatter written elsewhere uses YAML this harness didn't
+read: quoted values, `>` block descriptions, and nested `metadata:` keys
+(whose indented `name:` was misread). `skill::frontmatter` now reads
+top-level keys and those scalars, and quotes on write when YAML needs it
+(`description: "Use when: …"`). Saves keep the keys they don't interpret
+(`license`, `allowed-tools`), so editing an imported skill doesn't strip
+them. Checked against all 63 skills in `anthropics/skills` and
+`openai/skills`: names and descriptions match PyYAML.
+
+**Safety:** imports unpack into a hidden staging folder beside the skills and
+move into place in one step. They refuse to overwrite an existing skill,
+skip `..`/absolute paths and symlinks, and are capped at 50 MB and 2,000
+files.

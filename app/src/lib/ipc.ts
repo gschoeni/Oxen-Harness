@@ -169,6 +169,33 @@ export const renameSkill = (
  *  description/instructions save a draft. */
 export const saveSkill = (scope: SkillScope, name: string, description: string, instructions: string) =>
   invoke<void>("save_skill", { scope, name, description, instructions });
+/** Write a skill's folder to `path` as a zip, laid out the way claude.ai's
+ *  "Upload skill" expects (`<name>/SKILL.md`). */
+export const exportSkill = (scope: SkillScope, name: string, path: string) =>
+  invoke<void>("export_skill", { scope, name, path });
+/** Import a skill from a `.zip`, `.skill`, or `SKILL.md`; resolves with its name. */
+export const importSkill = (scope: SkillScope, path: string) =>
+  invoke<string>("import_skill", { scope, path });
+
+/** Native "save as" for a skill export. Null if cancelled. */
+export async function pickSkillExportPath(name: string): Promise<string | null> {
+  const chosen = await save({
+    title: "Export skill",
+    defaultPath: `${name}.zip`,
+    filters: [{ name: "Skill archive", extensions: ["zip"] }],
+  });
+  return chosen ?? null;
+}
+
+/** Native file picker for a skill to import. Null if cancelled. */
+export async function pickSkillFile(): Promise<string | null> {
+  const selected = await open({
+    multiple: false,
+    title: "Import a skill",
+    filters: [{ name: "Skill", extensions: ["zip", "skill", "md"] }],
+  });
+  return typeof selected === "string" ? selected : null;
+}
 /** Delete a skill's directory (SKILL.md plus supporting files). */
 export const deleteSkill = (scope: SkillScope, name: string) =>
   invoke<void>("delete_skill", { scope, name });

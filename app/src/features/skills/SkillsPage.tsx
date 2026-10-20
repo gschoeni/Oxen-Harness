@@ -7,19 +7,37 @@
 //
 // The page is a small flow: the LIST of skills, a SHOW view that renders a
 // skill's instructions as markdown, a NEW view that names the skill and picks
-// where it lives (creating it on disk as a draft), and an EDIT view with a
-// write/preview markdown editor that saves as you type. Everything but the
-// list takes over the whole subpage.
+// where it lives (creating it on disk as a draft), an EDIT view with a
+// write/preview markdown editor that saves as you type, and an IMPORT view.
+// Everything but the list takes over the whole subpage.
+//
+// Skills travel as files: export writes a `<name>.zip` holding the skill's
+// folder (the layout claude.ai's "Upload skill" takes, and what Codex and
+// Claude Code keep on disk), and import takes that zip, a `.skill`, or a
+// lone SKILL.md.
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ChevronRight, GraduationCap, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronRight,
+  Download,
+  GraduationCap,
+  Pencil,
+  Plus,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { Button } from "../../components/ui";
 import { Select } from "../../components/ui/Select";
 import {
   createSkill,
   deleteSkill,
+  exportSkill,
+  importSkill,
   listSkills,
   listTools,
+  pickSkillExportPath,
+  pickSkillFile,
   renameSkill,
   saveSkill,
   setSkillEnabled,
@@ -39,7 +57,8 @@ type View =
   | { kind: "list" }
   | { kind: "show"; name: string; scope: SkillScope }
   | { kind: "edit"; name: string; scope: SkillScope }
-  | { kind: "new" };
+  | { kind: "new" }
+  | { kind: "import" };
 
 export function SkillsPage() {
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
@@ -92,6 +111,11 @@ export function SkillsPage() {
     await reloadThen({ kind: "edit", ...to });
   }
 
+  async function importFrom(scope: SkillScope, path: string) {
+    const name = await importSkill(scope, path);
+    await reloadThen({ kind: "show", name, scope });
+  }
+
   async function remove(skill: SkillInfo) {
     await deleteSkill(skill.scope, skill.name);
     await load();
@@ -134,6 +158,10 @@ export function SkillsPage() {
     return <SkillCreate onCreate={create} onCancel={() => setView({ kind: "list" })} />;
   }
 
+  if (view.kind === "import") {
+    return <SkillImport onImport={importFrom} onCancel={() => setView({ kind: "list" })} />;
+  }
+
   return (
     <div className="settings-page">
       <TeachingNav current="skills" />
@@ -165,6 +193,10 @@ export function SkillsPage() {
           <Button variant="outline" className="tool-add" onClick={() => setView({ kind: "new" })} disabled={skills === null}>
             <Plus size={15} />
             New skill
+          </Button>
+          <Button variant="outline" className="tool-add" onClick={() => setView({ kind: "import" })} disabled={skills === null}>
+            <Upload size={15} />
+            Import skill
           </Button>
         </div>
       </section>
@@ -269,8 +301,22 @@ function SkillShow({
   onToggle: (name: string, enabled: boolean) => void;
 }) {
   const project = useActiveProject();
+  const [exported, setExported] = useState<{ path?: string; error?: string } | null>(null);
   const scopeLabel =
     skill.scope === "project" && project ? `project · ${project.name}` : skill.scope;
+
+  async function exportZip() {
+    setExported(null);
+    try {
+      const path = await pickSkillExportPath(skill.name);
+      if (!path) return;
+      await exportSkill(skill.scope, skill.name, path);
+      setExported({ path });
+    } catch (e) {
+      setExported({ error: String(e) });
+    }
+  }
+
   return (
     <div className="settings-page skill-detail">
       <Button size="sm" variant="ghost" className="skill-back" onClick={onBack}>
@@ -292,11 +338,26 @@ function SkillShow({
         </div>
         <div className="skill-detail-actions">
           <ToolSwitch name={skill.name} enabled={skill.enabled} onToggle={onToggle} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportZip}
+            title="Save as a .zip that Claude, Codex, Claude Code, and this app can import"
+          >
+            <Download size={15} /> Export
+          </Button>
           <Button variant="primary" size="sm" onClick={onEdit}>
             <Pencil size={15} /> Edit
           </Button>
         </div>
       </header>
+
+      {exported?.path && (
+        <span className="save-status ok">
+          Exported to <code>{exported.path}</code>
+        </span>
+      )}
+      {exported?.error && <span className="save-status err">{exported.error}</span>}
 
       <article className="skill-md" aria-label="Skill instructions">
         {skill.instructions ? (
@@ -339,7 +400,6 @@ function IdentityFields({
   value: SkillIdentity;
   onChange: (value: SkillIdentity) => void;
 }) {
-  const project = useActiveProject();
   return (
     <div className="tool-editor-grid">
       <label className="tool-field">
@@ -354,26 +414,99 @@ function IdentityFields({
         />
         <span className="tool-field-hint">Lowercase, hyphens — how the model refers to it.</span>
       </label>
-      <label className="tool-field">
-        <span className="field-name">Available in</span>
-        <Select
-          label="Skill scope"
-          value={value.scope}
-          options={[
-            { value: "global", label: "Every project (global)" },
-            {
-              value: "project",
-              label: project ? `This project only — ${project.name}` : "This project only",
-            },
-          ]}
-          onValueChange={(scope) => onChange({ ...value, scope: scope as SkillScope })}
-        />
-        <span className="tool-field-hint" title={project?.path}>
-          {value.scope === "project" && project
-            ? `Saved into ${project.name}'s repo (.oxen-harness/skills/), so your team gets it too.`
-            : "Project skills live in the repo, so your team gets them too."}
-        </span>
-      </label>
+      <ScopeField value={value.scope} onChange={(scope) => onChange({ ...value, scope })} />
+    </div>
+  );
+}
+
+/** "Available in": every project, or only the active one. */
+function ScopeField({
+  value,
+  onChange,
+}: {
+  value: SkillScope;
+  onChange: (value: SkillScope) => void;
+}) {
+  const project = useActiveProject();
+  return (
+    <label className="tool-field">
+      <span className="field-name">Available in</span>
+      <Select
+        label="Skill scope"
+        value={value}
+        options={[
+          { value: "global", label: "Every project (global)" },
+          {
+            value: "project",
+            label: project ? `This project only — ${project.name}` : "This project only",
+          },
+        ]}
+        onValueChange={(scope) => onChange(scope as SkillScope)}
+      />
+      <span className="tool-field-hint" title={project?.path}>
+        {value === "project" && project
+          ? `Saved into ${project.name}'s repo (.oxen-harness/skills/), so your team gets it too.`
+          : "Project skills live in the repo, so your team gets them too."}
+      </span>
+    </label>
+  );
+}
+
+/** Choose where an imported skill goes, then pick the file. */
+function SkillImport({
+  onImport,
+  onCancel,
+}: {
+  onImport: (scope: SkillScope, path: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [scope, setScope] = useState<SkillScope>("global");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function choose() {
+    setError(null);
+    try {
+      const path = await pickSkillFile();
+      if (!path) return;
+      setBusy(true);
+      await onImport(scope, path);
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="settings-page skill-detail">
+      <Button size="sm" variant="ghost" className="skill-back" onClick={onCancel}>
+        <ArrowLeft size={15} />
+        All skills
+      </Button>
+
+      <div className="settings-label">Import skill</div>
+      <p className="hint">
+        Takes a skill shared as a <code>.zip</code> or <code>.skill</code> file (the format
+        Claude uses for uploading skills, and what <strong>Export</strong> here produces), or a
+        single <code>SKILL.md</code>. Skills from Codex or Claude Code are folders — zip the folder
+        to bring it in. Supporting files come along.
+      </p>
+
+      <div className="tool-editor">
+        <div className="tool-editor-grid">
+          <ScopeField value={scope} onChange={setScope} />
+        </div>
+        {error && <span className="save-status err">{error}</span>}
+        <div className="tool-row-actions tool-editor-actions">
+          <Button variant="primary" size="sm" onClick={choose} disabled={busy}>
+            <Upload size={15} />
+            {busy ? "Importing…" : "Choose file…"}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

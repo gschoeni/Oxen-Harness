@@ -229,6 +229,8 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::skills::rename_skill,
                 commands::skills::save_skill,
                 commands::skills::delete_skill,
+                commands::skills::export_skill,
+                commands::skills::import_skill,
                 commands::skills::set_skill_enabled,
                 commands::session::export_finetuning,
                 commands::session::import_sources_scan,

@@ -3,6 +3,8 @@
 //! discovery/persistence lives in `harness_runtime::skills`; these commands
 //! are the webview's thin entry points, scoped to the active project.
 
+use std::path::Path;
+
 use tauri::State;
 
 use crate::state::AppState;
@@ -55,6 +57,40 @@ pub(crate) async fn save_skill(
     let root = state.active_root().await;
     harness_runtime::skills::save_skill(&root, scope, &name, &description, &instructions)
         .map_err(|e| e.to_string())
+}
+
+/// Export a skill's folder to `path` as a zip (the layout claude.ai imports).
+#[tauri::command]
+pub(crate) async fn export_skill(
+    state: State<'_, AppState>,
+    scope: harness_tools::SkillScope,
+    name: String,
+    path: String,
+) -> Result<(), String> {
+    let root = state.active_root().await;
+    tokio::task::spawn_blocking(move || {
+        harness_runtime::skills::archive::export_skill(&root, scope, &name, Path::new(&path))
+    })
+    .await
+    .map_err(|e| format!("exporting skill: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+/// Import a skill from a `.zip`, `.skill`, or `SKILL.md` at `path` into
+/// `scope`, returning its name.
+#[tauri::command]
+pub(crate) async fn import_skill(
+    state: State<'_, AppState>,
+    scope: harness_tools::SkillScope,
+    path: String,
+) -> Result<String, String> {
+    let root = state.active_root().await;
+    tokio::task::spawn_blocking(move || {
+        harness_runtime::skills::archive::import_skill(&root, scope, Path::new(&path))
+    })
+    .await
+    .map_err(|e| format!("importing skill: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 /// Delete a skill's directory (SKILL.md plus any supporting files).

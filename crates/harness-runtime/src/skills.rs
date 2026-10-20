@@ -14,10 +14,14 @@
 use std::path::{Path, PathBuf};
 
 use harness_config::paths;
-use harness_tools::skill::{is_valid_skill_name, load_skills_dir, Skill, SkillScope, SkillTool};
+use harness_tools::skill::{
+    is_valid_skill_name, load_skills_dir, render_skill_md, Skill, SkillScope, SkillTool,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimeError;
+
+pub mod archive;
 
 /// Schema version for `skills.json`.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -138,14 +142,14 @@ pub fn list(workspace_root: &Path, prefs: &SkillPrefs) -> Vec<SkillInfo> {
 
 /// The directory a skill of `scope` lives in (global config dir or the
 /// project's `.oxen-harness/skills/`).
-fn scope_dir(workspace_root: &Path, scope: SkillScope) -> Result<PathBuf, RuntimeError> {
+pub(super) fn scope_dir(workspace_root: &Path, scope: SkillScope) -> Result<PathBuf, RuntimeError> {
     match scope {
         SkillScope::Global => Ok(paths::skills_dir()?),
         SkillScope::Project => Ok(project_skills_dir(workspace_root)),
     }
 }
 
-fn check_name(name: &str) -> Result<(), RuntimeError> {
+pub(super) fn check_name(name: &str) -> Result<(), RuntimeError> {
     if is_valid_skill_name(name) {
         Ok(())
     } else {
@@ -164,7 +168,7 @@ fn scope_label(scope: SkillScope) -> &'static str {
 
 /// Where a new skill named `name` would go, refusing to clobber one already
 /// there.
-fn vacant_skill_dir(
+pub(super) fn vacant_skill_dir(
     workspace_root: &Path,
     scope: SkillScope,
     name: &str,
@@ -210,8 +214,14 @@ pub fn save_skill(
 
     let dir = scope_dir(workspace_root, scope)?.join(name);
     std::fs::create_dir_all(&dir).map_err(RuntimeError::Io)?;
-    let md = format!("---\nname: {name}\ndescription: {description}\n---\n\n{instructions}\n");
-    std::fs::write(dir.join("SKILL.md"), md).map_err(RuntimeError::Io)?;
+    let path = dir.join("SKILL.md");
+    let previous = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(RuntimeError::Io(e)),
+    };
+    let md = render_skill_md(name, &description, instructions, previous.as_deref());
+    std::fs::write(path, md).map_err(RuntimeError::Io)?;
     Ok(())
 }
 

@@ -33,6 +33,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{CallContext, ToolError, TypedTool};
 
+mod frontmatter;
+
 /// The tool name the model calls to load a skill.
 pub const SKILL_TOOL: &str = "skill";
 
@@ -92,25 +94,11 @@ pub fn parse_skill_md(contents: &str, dir: &Path, scope: SkillScope) -> Result<S
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let rest = contents
-        .strip_prefix("---")
-        .ok_or("SKILL.md must start with `---` frontmatter")?;
-    let (frontmatter, body) = rest
-        .split_once("\n---")
-        .ok_or("frontmatter is missing its closing `---`")?;
-
-    let mut name = None;
-    let mut description = None;
-    for line in frontmatter.lines() {
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        match key.trim() {
-            "name" => name = Some(value.trim().to_string()),
-            "description" => description = Some(value.trim().to_string()),
-            _ => {} // tolerate extra keys (version, license, …)
-        }
-    }
+    let (entries, body) = frontmatter::split(contents)?;
+    // Extra keys (license, allowed-tools, metadata, …) are tolerated.
+    let value = |key: &str| entries.iter().find(|e| e.key == key).map(|e| e.scalar());
+    let name = value("name");
+    let description = value("description");
 
     // The directory is the identity; a frontmatter `name` must agree so a
     // renamed folder can't silently advertise a stale name.
@@ -123,7 +111,7 @@ pub fn parse_skill_md(contents: &str, dir: &Path, scope: SkillScope) -> Result<S
         ));
     }
     let description = description.unwrap_or_default();
-    let instructions = body.trim_start_matches('-').trim().to_string();
+    let instructions = body.trim().to_string();
 
     Ok(Skill {
         name,
@@ -132,6 +120,37 @@ pub fn parse_skill_md(contents: &str, dir: &Path, scope: SkillScope) -> Result<S
         dir: dir.to_path_buf(),
         scope,
     })
+}
+
+/// Render a `SKILL.md`. Frontmatter keys other than `name` and `description`
+/// in `previous` (the file being replaced) are kept, so editing a skill
+/// written for another tool doesn't strip its `license` or `allowed-tools`.
+pub fn render_skill_md(
+    name: &str,
+    description: &str,
+    instructions: &str,
+    previous: Option<&str>,
+) -> String {
+    let mut md = format!(
+        "---\nname: {}\ndescription: {}\n",
+        frontmatter::scalar(name),
+        frontmatter::scalar(description)
+    );
+    let extras = previous
+        .and_then(|p| frontmatter::split(p).ok())
+        .map(|(entries, _)| entries)
+        .unwrap_or_default();
+    for entry in extras
+        .iter()
+        .filter(|e| e.key != "name" && e.key != "description")
+    {
+        md.push_str(&entry.raw);
+        md.push('\n');
+    }
+    md.push_str("---\n\n");
+    md.push_str(instructions);
+    md.push('\n');
+    md
 }
 
 /// Load every well-formed skill under `dir` (one subdirectory per skill, each
@@ -143,7 +162,8 @@ pub fn load_skills_dir(dir: &Path, scope: SkillScope) -> Vec<Skill> {
     };
     let mut skills: Vec<Skill> = entries
         .flatten()
-        .filter(|e| e.path().is_dir())
+        // Hidden folders are never skills (an import stages in one).
+        .filter(|e| e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.'))
         .filter_map(|e| {
             let md = e.path().join("SKILL.md");
             let contents = std::fs::read_to_string(&md).ok()?;
@@ -286,6 +306,31 @@ mod tests {
     }
 
     #[test]
+    fn reads_skills_written_for_other_tools() {
+        let md = "---\nname: pdf\ndescription: >\n  Fill PDF forms: use when\n  the user has a PDF.\nlicense: Apache-2.0\nmetadata:\n  name: ignored\n---\n\nSteps.";
+        let skill = parse_skill_md(md, &dir(), SkillScope::Global).unwrap();
+        assert_eq!(skill.name, "pdf");
+        assert_eq!(
+            skill.description,
+            "Fill PDF forms: use when the user has a PDF."
+        );
+        assert_eq!(skill.instructions, "Steps.");
+    }
+
+    #[test]
+    fn render_keeps_unknown_keys_and_round_trips() {
+        let previous = "---\nname: old\ndescription: Old.\nlicense: MIT\nallowed-tools:\n- Bash\n---\nOld body.";
+        let md = render_skill_md("pdf", "Fill forms: fast", "New body.", Some(previous));
+        assert_eq!(
+            md,
+            "---\nname: pdf\ndescription: \"Fill forms: fast\"\nlicense: MIT\nallowed-tools:\n- Bash\n---\n\nNew body.\n"
+        );
+        let skill = parse_skill_md(&md, &dir(), SkillScope::Global).unwrap();
+        assert_eq!(skill.description, "Fill forms: fast");
+        assert_eq!(skill.instructions, "New body.");
+    }
+
+    #[test]
     fn rejects_bad_names() {
         let md = "---\nname: Bad Name\ndescription: d\n---\nBody.";
         assert!(parse_skill_md(md, &dir(), SkillScope::Global).is_err());
@@ -311,6 +356,15 @@ mod tests {
         let skills = load_skills_dir(tmp.path(), SkillScope::Global);
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "good-skill");
+
+        let hidden = tmp.path().join(".import-x");
+        std::fs::create_dir_all(&hidden).unwrap();
+        std::fs::write(
+            hidden.join("SKILL.md"),
+            "---\nname: staged\ndescription: d\n---\nb",
+        )
+        .unwrap();
+        assert_eq!(load_skills_dir(tmp.path(), SkillScope::Global).len(), 1);
 
         // A missing directory is simply empty.
         assert!(load_skills_dir(&tmp.path().join("nope"), SkillScope::Global).is_empty());
