@@ -34,6 +34,13 @@ describe("ProjectsNav", () => {
     expect(useStore.getState().homeOpen).toBe(true);
   });
 
+  it("opens Settings from the nav, without leaving the project", async () => {
+    render(<ProjectsNav />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(useStore.getState().settingsOpen).toBe(true);
+    expect(useStore.getState().homeOpen).toBe(false);
+  });
+
   it("signals activity in other projects", () => {
     useStore.setState({ runStatus: { other: "running" } });
     render(<ProjectsNav />);

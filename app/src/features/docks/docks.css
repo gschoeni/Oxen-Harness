@@ -51,6 +51,20 @@
     background var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease);
 }
+/* Home stretches; the Settings gear is a square at the row's far end. */
+.projects-nav-row {
+  display: flex;
+  flex-shrink: 0;
+}
+.projects-nav-row > .projects-nav:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.projects-nav.projects-nav-settings {
+  width: var(--pane-strip-h);
+  justify-content: center;
+  padding: 0;
+}
 .projects-nav:hover {
   background: var(--surface-hover);
   color: var(--text);
