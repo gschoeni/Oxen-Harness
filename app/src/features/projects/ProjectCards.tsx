@@ -1,6 +1,6 @@
 // Home's card view: one card per project with its vital signs (running,
 // needs-you, open chats). Established projects resume their newest chat;
-// fresh ones open their home.
+// fresh ones open a new chat there, in the same chat layout.
 
 import { useMemo, useState } from "react";
 import { ArrowDownAZ, Clock, FolderOpen, FolderPlus, Trash2 } from "lucide-react";
@@ -29,13 +29,13 @@ export function sortProjects(projects: Project[], sort: CardSort): Project[] {
   return sorted;
 }
 
-export function ProjectCards({ onOpenProject }: { onOpenProject: (project: Project) => void }) {
+export function ProjectCards() {
   const projects = useStore((s) => s.projects);
   const sessions = useStore((s) => s.sessions);
   const activePath = useStore((s) => s.session?.workspace ?? null);
   const resume = useStore((s) => s.resume);
   const setHomeOpen = useStore((s) => s.setHomeOpen);
-  const selectProject = useStore((s) => s.selectProject);
+  const enterProject = useStore((s) => s.enterProject);
   const removeProject = useStore((s) => s.removeProject);
   const [sort, setSort] = useState<CardSort>(savedSort);
   const [pendingDelete, setPendingDelete] = useState<Project | null>(null);
@@ -59,8 +59,7 @@ export function ProjectCards({ onOpenProject }: { onOpenProject: (project: Proje
       setHomeOpen(false);
       return;
     }
-    onOpenProject(project);
-    await selectProject(project.path);
+    await enterProject(project.path);
   }
 
   return (

@@ -14,7 +14,6 @@ import "./home.css";
 export function HomePage() {
   const projects = useStore((s) => s.projects);
   const projectHomePath = useStore((s) => s.projectHomePath);
-  const openProjectHome = useStore((s) => s.openProjectHome);
   const setHomeOpen = useStore((s) => s.setHomeOpen);
   const refreshHistory = useStore((s) => s.refreshHistory);
   const refreshThreads = useStore((s) => s.refreshThreads);
@@ -64,10 +63,7 @@ export function HomePage() {
           onProjectChanged={projectChanged}
         />
       ) : (
-        <Overview
-          onOpenProject={(project) => openProjectHome(project.path)}
-          onStartProject={() => setStarting(true)}
-        />
+        <Overview onStartProject={() => setStarting(true)} />
       )}
 
       {starting && (
@@ -83,13 +79,7 @@ export function HomePage() {
   );
 }
 
-function Overview({
-  onOpenProject,
-  onStartProject,
-}: {
-  onOpenProject: (project: Project) => void;
-  onStartProject: () => void;
-}) {
+function Overview({ onStartProject }: { onStartProject: () => void }) {
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
 
   return (
@@ -109,7 +99,7 @@ function Overview({
         </div>
       </header>
 
-      <ProjectCards onOpenProject={onOpenProject} />
+      <ProjectCards />
     </main>
   );
 }

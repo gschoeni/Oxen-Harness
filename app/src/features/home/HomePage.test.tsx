@@ -130,6 +130,16 @@ describe("Home", () => {
     expect(useStore.getState().homeOpen).toBe(false);
   });
 
+  it("a card for a project with no chats opens a fresh chat there, not its setup page", async () => {
+    seed({ entries: [] }, [{ ...project("/work/app", "App"), session_count: 0 }]);
+    const { container } = render(<HomePage />);
+    await userEvent.click(container.querySelector(".project-card-open") as HTMLElement);
+    await waitFor(() => expect(useStore.getState().homeOpen).toBe(false));
+    expect(ipc.setActiveProject).toHaveBeenCalledWith("/work/app");
+    expect(ipc.newSession).toHaveBeenCalled();
+    expect(screen.queryByLabelText("Project name")).toBeNull();
+  });
+
   it("shows only the project cards, with no media lens toggle", () => {
     seed({ entries: [entry()] }, [project("/work/app", "App")]);
     render(<HomePage />);
