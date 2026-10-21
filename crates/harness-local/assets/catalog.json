@@ -146,6 +146,28 @@
       "note": "24 GB build of GLM-4.7 Flash: passed every agent run, ~29 tok/s on an M4 Max. ~12.9 GB."
     },
     {
+      "id": "flint-40b-a2.5b",
+      "display": "Flint 40B A2.5B",
+      "params": "40B-A2.5B (MoE)",
+      "repo": "RecursiveSI/flint-int4-gguf",
+      "file": "flint-int4-q4_1.gguf",
+      "quant": "Q4_1",
+      "approx_bytes": 25992966976,
+      "context": 262144,
+      "note": "Recursive's coding-agent MoE (~2.5B active), reasoning + native tool calls, 256K context. Official INT4 build (trained INT4 codes as Q4_1), ~26 GB: wants a 48 GB Mac. The Q2_K_XL build fits 36 GB."
+    },
+    {
+      "id": "flint-40b-a2.5b-q2",
+      "display": "Flint 40B A2.5B (Q2_K_XL)",
+      "params": "40B-A2.5B (MoE)",
+      "repo": "unsloth/flint-GGUF",
+      "file": "flint-preview-UD-Q2_K_XL.gguf",
+      "quant": "Q2_K_XL",
+      "approx_bytes": 13562207680,
+      "context": 262144,
+      "note": "Flint for 24-36 GB Macs: Unsloth's dynamic 2-bit build, ~13.6 GB. Passed every agent run at ~92 tok/s on an M4 Max, but at 2-bit it reasons long and sometimes loops, so runs took 30 s to 6 min."
+    },
+    {
       "id": "lfm2.5-24b-a2b",
       "display": "LFM2.5 24B A2B",
       "params": "24B-A2B (MoE)",

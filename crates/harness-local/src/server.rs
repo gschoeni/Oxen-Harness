@@ -15,7 +15,7 @@
 //! pid, and [`reap_stale_servers`] kills any entry whose owner is gone. Hosts
 //! call it at boot and before every new spawn.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -262,16 +262,7 @@ impl LocalServer {
 
         on_status(LoadPhase::Starting);
         let mut child = Command::new(&binary)
-            .arg("-m")
-            .arg(model_path)
-            .args(["--host", "127.0.0.1"])
-            .args(["--port", &port.to_string()])
-            .args(["-a", alias])
-            .args(["-c", &context.to_string()])
-            // Offload to GPU when the build supports it (ignored on CPU-only).
-            .args(["-ngl", "99"])
-            // Enable the model's chat template so tool calling works.
-            .arg("--jinja")
+            .args(server_args(model_path, port, alias, context))
             .stdout(std::process::Stdio::null())
             // Capture stderr so we can tell when the runtime finishes initializing
             // and the model itself starts loading (for accurate progress phases).
@@ -410,6 +401,35 @@ impl LocalServer {
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
     }
+}
+
+/// The `llama-server` command line for one model on one port.
+fn server_args(model_path: &Path, port: u16, alias: &str, context: u32) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["-m".into(), model_path.into()];
+    for arg in [
+        "--host",
+        "127.0.0.1",
+        "--port",
+        &port.to_string(),
+        "-a",
+        alias,
+        "-c",
+        &context.to_string(),
+        // Offload to GPU when the build supports it (ignored on CPU-only).
+        "-ngl",
+        "99",
+        // Enable the model's chat template so tool calling works.
+        "--jinja",
+        // No host-RAM prompt cache (up to 8 GiB by default). Each server
+        // serves one chat whose live prompts already sit in the KV slots, and
+        // the cache's growth mid-turn is what pushed a 13 GB model on a 36 GB
+        // laptop into swap and tripped the memory watchdog.
+        "--cache-ram",
+        "0",
+    ] {
+        args.push(arg.into());
+    }
+    args
 }
 
 impl Drop for LocalServer {
@@ -705,6 +725,18 @@ fn find_free_port() -> Result<u16, LocalError> {
 mod tests {
     use super::*;
     use std::ffi::OsString;
+
+    #[test]
+    fn server_args_serve_the_model_without_a_host_prompt_cache() {
+        let args = server_args(Path::new("/m/flint.gguf"), 8080, "flint", 16_384);
+        let joined: Vec<_> = args.iter().map(|a| a.to_string_lossy()).collect();
+        let joined = joined.join(" ");
+        assert_eq!(
+            joined,
+            "-m /m/flint.gguf --host 127.0.0.1 --port 8080 -a flint -c 16384 \
+             -ngl 99 --jinja --cache-ram 0"
+        );
+    }
 
     #[test]
     fn install_hint_is_actionable() {

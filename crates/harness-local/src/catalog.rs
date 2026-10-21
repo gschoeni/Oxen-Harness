@@ -394,6 +394,20 @@ mod tests {
                 17_730_509_792,
             ),
             (
+                "flint-40b-a2.5b",
+                "RecursiveSI/flint-int4-gguf",
+                "flint-int4-q4_1.gguf",
+                "Q4_1",
+                25_992_966_976,
+            ),
+            (
+                "flint-40b-a2.5b-q2",
+                "unsloth/flint-GGUF",
+                "flint-preview-UD-Q2_K_XL.gguf",
+                "Q2_K_XL",
+                13_562_207_680,
+            ),
+            (
                 "lfm2.5-24b-a2b",
                 "LiquidAI/LFM2.5-24B-A2B-GGUF",
                 "LFM2.5-24B-A2B-QAD-Q4_0.gguf",

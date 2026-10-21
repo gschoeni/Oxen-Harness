@@ -439,10 +439,18 @@ chat template (and thus tool calling) works.
   feature the user asked for. Weights live in `~/.oxen-harness/models/`.
 - **`llama-server` resolution** prefers `LLAMA_SERVER`, then the desktop-managed
   runtime, then `PATH`/Homebrew. The managed Apple Silicon build is deliberately
-  pinned (now llama.cpp `b10353`, the first release with Muse Glimmer's
-  `LLM_ARCH_MUSE_GLIMMER`; Bonsai Q1 and mainline Q2 CPU/Metal have worked since
-  `b10002`); other platforms get an actionable install hint rather than a
-  cryptic spawn error.
+  pinned (now llama.cpp `b11803`, the first release with Recursive Flint's
+  `FlintForCausalLM`; Muse Glimmer needs `b10353`+, Bonsai Q1 and mainline Q2
+  CPU/Metal have worked since `b10002`); other platforms get an actionable
+  install hint rather than a cryptic spawn error.
+- **No host-RAM prompt cache** (`--cache-ram 0`, Oct 2026). llama-server
+  defaults to an 8 GiB host-memory cache of idle prompts. A harness server
+  serves one chat, and its live prompts already sit in the KV slots, so the
+  cache buys little. On `b11803` its growth mid-turn pushed Gemma 4 Q3 (12.7 GB)
+  on a loaded 36 GB laptop past the watchdog's swap limit in 3 of 4 runs. With
+  the cache off it passed every run with little or no swap growth. Recursive's
+  Flint card gives the same advice. The flag needs llama.cpp from Oct 2025 or
+  later.
 - **Server lifecycle**: a free port is picked, the process spawned, `/health`
   polled until the model loads, and the process killed on `Drop` so a session never
   leaks a background server. Selected at startup via `--local`; mid-session

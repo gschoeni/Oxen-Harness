@@ -192,9 +192,9 @@ brew install llama.cpp                       # macOS
 ```
 
 Use a current build for newer formats. The desktop setup manages a pinned
-Apple Silicon build (`b10353`); if Homebrew is already installed, run
-`brew upgrade llama.cpp` before using Bonsai 27B or Muse Glimmer 30B
-(Muse Glimmer needs `b10353` or newer).
+Apple Silicon build (`b11803`); if Homebrew is already installed, run
+`brew upgrade llama.cpp` before using Bonsai 27B, Muse Glimmer 30B, or Flint
+(Muse Glimmer needs `b10353` or newer, Flint `b11803`).
 
 **2. Browse and download a model.** The catalog lives in configuration files,
 not code: Qwen3 at `Q4_K_M` (0.6B through 32B and 30B-A3B),
@@ -273,8 +273,10 @@ the download size at or below **total RAM minus what your apps use, minus
 | ″ | `qwen3.6-35b-a3b-iq3` | ~13.2 GB | Close second: fast and consistent |
 | ″ | `glm-4.7-flash-iq3` | ~12.9 GB | Reliable, a bit slower |
 | ″ | `gpt-oss-20b` | ~12.1 GB | Fast, but its file edits are clumsy |
+| ″ | `flint-40b-a2.5b-q2` | ~13.6 GB | Passed every agent run, but at 2-bit it reasons long and sometimes loops, so runs are slow |
 | 32 GB+ with little else running (e.g. on a plane) | `gemma-4-26b-a4b`, `qwen3.6-35b-a3b`, `glm-4.7-flash` | ~16–18 GB | Q4 builds: same models at higher quality |
 | ″ | `qwen3.8-27b` | ~16.5 GB | Strongest 27B on agentic-coding benchmarks, but dense, so slow |
+| 48 GB+ | `flint-40b-a2.5b` | ~26 GB | Recursive's official INT4 build of Flint (untested here: needs a 48 GB Mac) |
 
 **Measured results.** Each of the 12–13 GB builds above was run end to end on a
 36 GB M4 Max with Docker, a terminal, browsers, and a debugger open. Each did
@@ -289,6 +291,7 @@ edit the file, run the tests) plus `llama-bench`:
 | `glm-4.7-flash-iq3` | 3/3 | 66–116 s | 29 tok/s | 524 tok/s |
 | `gpt-oss-20b` | 2/3 | 44–51 s | 37 tok/s | 906 tok/s |
 | `qwen3.8-27b-iq3` | 3/3 | 149–230 s | 8 tok/s | 89 tok/s |
+| `flint-40b-a2.5b-q2` | 7/7 | 28–341 s | 92 tok/s | 231 tok/s |
 
 On that machine the ~16 GB Q4 builds did not fit beside the open apps. Loading
 `glm-4.7-flash` pushed ~7 GB of them into swap within seconds. So the Q4 rows
@@ -296,8 +299,8 @@ in the picker table assume the model has the machine mostly to itself.
 
 **Tips:**
 
-- **Prefer mixture-of-experts (MoE) models on a laptop.** LFM2.5 A2B, Gemma 4 A4B,
-  Qwen3.6 A3B, GLM-4.7 Flash, and gpt-oss have only 2–4B parameters active per
+- **Prefer mixture-of-experts (MoE) models on a laptop.** LFM2.5 A2B, Flint A2.5B,
+  Gemma 4 A4B, Qwen3.6 A3B, GLM-4.7 Flash, and gpt-oss have only 2–4B parameters active per
   token. That makes them 4–5× faster than a dense 27B like Qwen3.8 at the same
   file size, and kinder to the battery.
 - **Going offline?** Run `oxen-harness models pull <id>` while you still have

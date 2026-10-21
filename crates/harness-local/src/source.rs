@@ -14,10 +14,10 @@ use crate::LocalError;
 
 /// Canonical GGUF quantization tokens understood by the sizing and display code.
 const KNOWN_QUANTS: &[&str] = &[
-    "IQ2_XXS", "IQ3_XXS", "Q4_K_XL", "Q2_G64", "PQ2_0", "IQ4_XS", "IQ4_NL", "IQ2_XS", "IQ3_XS",
-    "IQ3_M", "IQ3_S", "IQ2_M", "Q3_K_L", "Q3_K_M", "Q3_K_S", "Q4_K_M", "Q4_K_S", "Q5_K_M",
-    "Q5_K_S", "Q1_0", "Q2_0", "Q2_K", "Q6_K", "Q4_0", "Q4_1", "Q5_0", "Q5_1", "Q8_0", "BF16",
-    "F16", "F32", "MXFP4",
+    "IQ2_XXS", "IQ3_XXS", "Q2_K_XL", "Q3_K_XL", "Q4_K_XL", "Q2_G64", "PQ2_0", "IQ4_XS", "IQ4_NL",
+    "IQ2_XS", "IQ3_XS", "IQ3_M", "IQ3_S", "IQ2_M", "Q3_K_L", "Q3_K_M", "Q3_K_S", "Q4_K_M",
+    "Q4_K_S", "Q5_K_M", "Q5_K_S", "Q1_0", "Q2_0", "Q2_K", "Q6_K", "Q4_0", "Q4_1", "Q5_0", "Q5_1",
+    "Q8_0", "BF16", "F16", "F32", "MXFP4",
 ];
 
 /// Published filename spellings that normalize to a canonical quant name.

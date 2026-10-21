@@ -350,6 +350,18 @@ and closed the obvious gaps (no MCP, no orchestration/network tools):
       the pinned `b10353` runtime with no harness changes. Same eval: 4/4 at
       22–33 s, 139 tok/s decode, 1449 tok/s prompt, free memory never below
       22% — the new best local pick.
+- [x] Recursive Flint 40B-A2.5B (released 2026-10-21): llama.cpp support
+      landed the same day in `b11803` (PR #30928), so the runtime pin moved
+      from `b10353`. Two catalog entries: `flint-40b-a2.5b` (official INT4 as
+      Q4_1, 26 GB, 48 GB Macs, untested here) and `flint-40b-a2.5b-q2`
+      (Unsloth UD-Q2_K_XL, 13.6 GB). Reasoning and GLM-style `<arg_key>`
+      tool calls parse into `reasoning_content`/`tool_calls` with no harness
+      changes. The GGUF carries the recommended sampling (temp 1.0, top-k 20,
+      top-p 0.95). Eval on the 36 GB M4 Max: 7/7 bug-fix runs, 92 tok/s
+      decode, but 28–341 s per run (median ~140 s): at 2-bit it sometimes
+      repeats one `edit_file` key pair until it hits the 4096-token reply cap,
+      and the harness recovers. The bump also needed `--cache-ram 0` (see
+      decisions) to keep Gemma 4 Q3 under the memory watchdog.
 
 ---
 
