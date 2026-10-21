@@ -127,7 +127,7 @@ pub(crate) async fn resolve_endpoint(
         }
         Err(e) => {
             eprintln!("\n{}", ui.red(&ui.death()));
-            eprintln!("  {}", ui.dim(&format!("The trail guide says: {e}")));
+            eprintln!("  {}", ui.dim(&format!("The trail guide says: {e:#}")));
             std::process::exit(1);
         }
     }
