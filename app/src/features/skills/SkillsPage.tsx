@@ -179,6 +179,10 @@ export function SkillsPage() {
 
         {skills === null ? (
           <p className="muted">Loading skills…</p>
+        ) : skills.length === 0 ? (
+          <p className="skills-empty">
+            No skills yet. Write one, or import a skill someone shared with you.
+          </p>
         ) : (
           <SkillGroups
             skills={skills}
@@ -187,7 +191,7 @@ export function SkillsPage() {
           />
         )}
 
-        <div className="tool-list">
+        <div className="skills-add">
           <Button variant="outline" className="tool-add" onClick={() => setView({ kind: "new" })} disabled={skills === null}>
             <Plus size={15} />
             New skill
@@ -236,7 +240,7 @@ function SkillGroups({
           <div className="skills-group-label" title={g.title}>
             {g.label}
           </div>
-          <div className="tool-list">
+          <div className="skills-cards">
             {g.skills.map((s) => (
               <SkillRow
                 key={`${s.scope}:${s.name}`}
@@ -268,13 +272,19 @@ function SkillRow({
   onToggle: (name: string, enabled: boolean) => void;
 }) {
   return (
-    <div className={`tool-row ${skill.enabled ? "" : "disabled"}`}>
-      <button className="tool-row-head" onClick={onOpen} aria-label={`Open skill ${skill.name}`}>
-        <GraduationCap size={15} className="tool-row-icon" />
-        <span className="tool-row-name">{skill.name}</span>
-        {skill.draft && <span className="skill-scope draft">draft</span>}
-        <span className="tool-row-desc">{skill.description}</span>
-        <ChevronRight size={15} className="skill-row-go" />
+    <div className={`skill-card ${skill.enabled ? "" : "disabled"}`}>
+      <button className="skill-card-main" onClick={onOpen} aria-label={`Open skill ${skill.name}`}>
+        <GraduationCap size={18} className="skill-card-icon" aria-hidden="true" />
+        <span className="skill-card-text">
+          <span className="skill-card-title">
+            <span className="skill-card-name">{skill.name}</span>
+            {skill.draft && <span className="skill-scope draft">draft</span>}
+          </span>
+          <span className={`skill-card-desc ${skill.description ? "" : "empty"}`}>
+            {skill.description || "No description yet."}
+          </span>
+        </span>
+        <ChevronRight size={16} className="skill-row-go" aria-hidden="true" />
       </button>
       <ToolSwitch name={skill.name} enabled={skill.enabled} onToggle={onToggle} />
     </div>

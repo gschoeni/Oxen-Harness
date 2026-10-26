@@ -69,9 +69,101 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  margin-top: var(--space-4);
 }
 .skills-group + .skills-group {
+  margin-top: var(--space-5);
+}
+.skills-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.skills-empty {
+  margin: var(--space-4) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+.skills-add {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-2);
   margin-top: var(--space-4);
+}
+
+/* One skill in the list: a card you click to read, with its switch. The
+   name is mono (it's what you type after `/`) and the description gets two
+   full lines, since it's the part that says what the skill does. */
+.skill-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-right: var(--space-4);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    opacity var(--dur-fast) var(--ease);
+}
+.skill-card:hover {
+  border-color: var(--separator-strong);
+  background: var(--surface-hover);
+}
+.skill-card.disabled {
+  opacity: 0.6;
+}
+.skill-card-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.skill-card-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.skill-card-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.skill-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.skill-card-name {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-card-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.skill-card-desc.empty {
+  color: var(--text-tertiary);
+  font-style: italic;
 }
 .skills-group-label {
   font-family: var(--font-display);

@@ -98,7 +98,7 @@ describe("SkillsPage", () => {
     expect(screen.getByText("review-checklist")).toBeInTheDocument();
     expect(screen.getByText("This project · OxenHarness")).toBeInTheDocument();
     expect(screen.getByText("Global · every project")).toBeInTheDocument();
-    expect(screen.getByText("review-checklist").closest(".tool-row")).toHaveClass("disabled");
+    expect(screen.getByText("review-checklist").closest(".skill-card")).toHaveClass("disabled");
 
     // The project group renders above the global one.
     const labels = [...document.querySelectorAll(".skills-group-label")].map(
