@@ -39,3 +39,27 @@
 - Share the agent loop core between the CLI and the Tauri app (Tauri commands call `harness-core`).
 - Pluggable tool registry so forks can add custom tools without touching core.
 - Vision support — the Oxen API accepts image content; could feed screenshots to the agent.
+
+## Release-review follow-ups (2026-10-25)
+
+Found in the pre-release review, judged not release-blocking:
+
+- **Gallery detail: drag a video into chat.** The custom player (007f236)
+  dropped the drag source; "Use as reference" still works. Needs a drag
+  handle that doesn't fight the scrubber.
+- **Lazy video thumbnails.** Every mounted `VideoThumb` decodes a frame
+  (`#t=0.1`); large galleries could start dozens of decoders. Attach `src`
+  on visibility (IntersectionObserver) or prefer the manifest poster.
+- **Typed host errors over HTTP.** Host methods return `String`, so the
+  server answers every failure 400 — a hub outage reads as bad input. Keep
+  error kinds (e.g. `DestinationError`) and map outages to 502.
+- **Skills:** a cross-volume skill move copies without staging and follows
+  file symlinks; two import errors misname the cause (duplicate-case roots,
+  a symlinked root SKILL.md); renaming into a scope where the name is
+  shadowed hides the skill.
+- **Media:** fractional durations round silently (and range-check after
+  rounding); a file given both as a chip and as a project path uploads
+  twice (label paths aren't canonicalized).
+- **Repository naming:** the project page's "Repository" card (`remote_repo`)
+  and Settings → Connection's "Project repository" (`media_repo`, which wins)
+  are two settings with one name. Decide whether to merge them.
