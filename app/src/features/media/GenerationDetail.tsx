@@ -28,6 +28,7 @@ import { useAssetSrc } from "../files/useAssetSrc";
 import { setDragPaths } from "../files/dnd";
 import { downloadLabel, useDownload } from "./useDownload";
 import { CompareView, compareOptions } from "./CompareView";
+import { VideoPlayer } from "../video/VideoPlayer";
 
 const NONE: MediaItem[] = [];
 type View = "details" | "raw";
@@ -137,10 +138,10 @@ export function GenerationDetail({
 }
 
 /** The whole frame, contained: tiles crop to squares, so this is where the
- *  real aspect ratio shows. Draggable into the chat. */
+ *  real aspect ratio shows. A clip plays in the app's own player; a picture
+ *  drags into the chat. */
 function Preview({ item, workspace, bust }: { item: MediaItem; workspace: string; bust: number }) {
   const src = useAssetSrc(workspace, item.path ?? "", bust);
-  const poster = useAssetSrc(workspace, item.poster ?? "", bust);
   if (!item.path || !src) {
     return (
       <div className="gallery-detail-preview">
@@ -148,26 +149,23 @@ function Preview({ item, workspace, bust }: { item: MediaItem; workspace: string
       </div>
     );
   }
+  if (item.kind === "video") {
+    // The player's stage fits the clip inside its box, so the box needs a
+    // definite size: the clip's own aspect where the manifest knows it.
+    const aspect = item.width && item.height ? `${item.width} / ${item.height}` : undefined;
+    return (
+      <div
+        className={`gallery-detail-preview video${aspect ? " sized" : ""}`}
+        style={aspect ? { aspectRatio: aspect } : undefined}
+      >
+        <VideoPlayer key={src} src={src} path={item.path} />
+      </div>
+    );
+  }
   const drag = (e: DragEvent) => setDragPaths(e.dataTransfer, [`${workspace}/${item.path}`]);
   return (
     <div className="gallery-detail-preview">
-      {item.kind === "video" ? (
-        <video
-          src={src}
-          controls
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="metadata"
-          poster={item.poster && poster ? poster : undefined}
-          draggable
-          onDragStart={drag}
-          title="Drag into the chat to attach"
-        />
-      ) : (
-        <img src={src} alt={item.prompt} draggable onDragStart={drag} title="Drag into the chat to attach" />
-      )}
+      <img src={src} alt={item.prompt} draggable onDragStart={drag} title="Drag into the chat to attach" />
     </div>
   );
 }

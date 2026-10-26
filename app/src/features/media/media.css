@@ -354,8 +354,17 @@ button.gallery-inflight:hover {
   overflow: hidden;
   background: #000;
 }
-.gallery-detail-preview img,
-.gallery-detail-preview video {
+/* The player sizes itself to its box: the clip's aspect (set inline when the
+   manifest knows it) within the preview's height cap. */
+.gallery-detail-preview.video {
+  display: flex;
+  width: 100%;
+  height: min(52vh, 560px);
+}
+.gallery-detail-preview.video.sized {
+  height: auto;
+}
+.gallery-detail-preview img {
   display: block;
   max-width: 100%;
   max-height: min(52vh, 560px);

@@ -226,6 +226,17 @@ describe("GalleryPanel", () => {
     expect(screen.getByText("flux-2-klein-4b")).toBeInTheDocument();
   });
 
+  it("plays a video generation in the app's player, not the system one", async () => {
+    const clip = item({ id: "v1", kind: "video", prompt: "a clip", path: "generations/2026-09-13/clip.mp4" });
+    useStore.setState({ media: { "/w": [clip] } });
+    const { container } = render(<GalleryPanel />);
+    await userEvent.click(await screen.findByTitle("a clip"));
+    const video = container.ownerDocument.querySelector(".gallery-detail-preview .video-player video");
+    expect(video).not.toBeNull();
+    expect(video?.hasAttribute("controls")).toBe(false);
+    expect(screen.getByRole("button", { name: /play/i })).toBeInTheDocument();
+  });
+
   it("walks the lineage in both directions and opens the originating chat", async () => {
     const photo = item({
       id: "p1",
