@@ -23,13 +23,20 @@ use crate::theme::Ui;
 /// The row that clears the project's choice.
 const DEFAULT_ROW: &str = "default";
 
-pub(crate) async fn handle_repl(rest: Option<String>, ui: &Ui) -> Result<()> {
-    let root = std::env::current_dir()?;
-    let api = harness_runtime::media::api();
+/// `root` is the session's workspace (where its media tools read the
+/// choice back), and `hub_base_url` the endpoint they generate on — both
+/// from the running session, never the shell's cwd or the saved host.
+pub(crate) async fn handle_repl(
+    rest: Option<String>,
+    root: &Path,
+    hub_base_url: &str,
+    ui: &Ui,
+) -> Result<()> {
+    let api = harness_runtime::media::api_for(hub_base_url);
     match rest.as_deref().map(str::trim).unwrap_or("") {
-        "" => pick(&root, api.as_ref(), ui).await,
-        "clear" | DEFAULT_ROW => switch(&root, None, api.as_ref(), ui).await,
-        repo => switch(&root, Some(repo), api.as_ref(), ui).await,
+        "" => pick(root, api.as_ref(), ui).await,
+        "clear" | DEFAULT_ROW => switch(root, None, api.as_ref(), ui).await,
+        repo => switch(root, Some(repo), api.as_ref(), ui).await,
     }
 }
 
@@ -126,13 +133,15 @@ async fn switch(
 }
 
 async fn show(destination: &Destination, api: Option<&harness_media::MediaApi>, ui: &Ui) {
+    // Nothing set: name the account's playground, or say why it can't be.
     let repo = match &destination.repo {
         Some(repo) => repo.clone(),
         None => match api {
-            Some(api) => harness_runtime::media::hub_default_repo(api)
-                .await
-                .unwrap_or_else(|_| "your playground".into()),
-            None => "your playground".into(),
+            Some(api) => match harness_runtime::media::hub_default_repo(api).await {
+                Ok(repo) => repo,
+                Err(e) => format!("your playground (couldn't ask Oxen.ai who you are: {e})"),
+            },
+            None => "your playground (no API key — /auth sets one)".into(),
         },
     };
     println!(

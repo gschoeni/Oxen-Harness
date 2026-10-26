@@ -19,10 +19,17 @@
 
 use std::time::Duration;
 
+use futures_util::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::hub::{body, send, HubError, HubRepos};
+
+/// One page of a repository listing.
+struct RepoPage {
+    rows: Vec<(String, String)>,
+    total_pages: u64,
+}
 
 /// Page size for repository listings (the hub caps it at 100).
 const PAGE_SIZE: u32 = 100;
@@ -104,12 +111,15 @@ pub enum DestinationError {
 }
 
 /// Parse `namespace/name` (surrounding whitespace and slashes tolerated;
-/// nested paths, empty halves, and other characters are rejected).
+/// nested paths, empty halves, and other characters are rejected). Both
+/// halves land in hub URL paths, so all-dot segments (`.`, `..`) are refused:
+/// URL normalization would resolve them into some other repository's path.
 pub fn parse_destination(raw: &str) -> Option<(String, String)> {
     let raw = raw.trim().trim_matches('/');
     let (ns, name) = raw.split_once('/')?;
     let valid = |s: &str| {
         !s.is_empty()
+            && !s.chars().all(|c| c == '.')
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
@@ -139,17 +149,20 @@ impl HubRepos {
                 });
             }
         }
-        for ns in &mut out {
-            ns.repos = self
-                .paged_repos(&format!("repos/{}", ns.name))
-                .await?
-                .into_iter()
-                .map(|(_, name)| name)
-                .collect();
+        // One listing per namespace plus the shared ones, all at once: an
+        // account with a dozen organizations would otherwise wait on each
+        // in turn.
+        let paths: Vec<String> = out.iter().map(|ns| format!("repos/{}", ns.name)).collect();
+        let (owned, shared_rows) = tokio::try_join!(
+            try_join_all(paths.iter().map(|path| self.paged_repos(path))),
+            self.paged_repos("user/repos"),
+        )?;
+        for (ns, rows) in out.iter_mut().zip(owned) {
+            ns.repos = rows.into_iter().map(|(_, name)| name).collect();
         }
 
         let mut shared: Vec<HubNamespace> = Vec::new();
-        for (namespace, name) in self.paged_repos("user/repos").await? {
+        for (namespace, name) in shared_rows {
             if let Some(own) = out
                 .iter_mut()
                 .find(|n| n.name.eq_ignore_ascii_case(&namespace))
@@ -235,55 +248,67 @@ impl HubRepos {
         let v: Value = self
             .get_json(&format!("users/{username}/orgs"), &[])
             .await?;
-        Ok(v.get("organizations")
+        let orgs = v
+            .get("organizations")
             .and_then(Value::as_array)
-            .map(|orgs| {
-                orgs.iter()
-                    .filter_map(|o| {
-                        let name = o.get("name")?.as_str()?.to_string();
-                        let role = o
-                            .get("access_level")
-                            .and_then(Value::as_str)
-                            .unwrap_or("viewer")
-                            .to_string();
-                        Some((name, role))
-                    })
-                    .collect()
+            .ok_or_else(|| {
+                HubError::Json(format!("users/{username}/orgs carried no organizations"))
+            })?;
+        Ok(orgs
+            .iter()
+            .filter_map(|o| {
+                let name = o.get("name")?.as_str()?.to_string();
+                // A row without a role is never trusted to create repositories.
+                let role = o
+                    .get("access_level")
+                    .and_then(Value::as_str)
+                    .unwrap_or("viewer")
+                    .to_string();
+                Some((name, role))
             })
-            .unwrap_or_default())
+            .collect())
     }
 
     /// `(namespace, name)` of every repository a paged listing returns, up
-    /// to [`MAX_PAGES`] pages.
+    /// to [`MAX_PAGES`] pages: the first page says how many there are, and
+    /// the rest are fetched together.
     async fn paged_repos(&self, path: &str) -> Result<Vec<(String, String)>, HubError> {
-        let mut out = Vec::new();
-        for page in 1..=MAX_PAGES {
-            let v: Value = self
-                .get_json(
-                    path,
-                    &[
-                        ("page", page.to_string()),
-                        ("page_size", PAGE_SIZE.to_string()),
-                    ],
-                )
-                .await?;
-            let rows = v
-                .get("repositories")
-                .and_then(Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            out.extend(rows.iter().filter_map(|r| {
+        let first = self.repo_page(path, 1).await?;
+        let pages = first.total_pages.clamp(1, u64::from(MAX_PAGES)) as u32;
+        let rest = try_join_all((2..=pages).map(|page| self.repo_page(path, page))).await?;
+        Ok(std::iter::once(first)
+            .chain(rest)
+            .flat_map(|page| page.rows)
+            .collect())
+    }
+
+    async fn repo_page(&self, path: &str, page: u32) -> Result<RepoPage, HubError> {
+        let v: Value = self
+            .get_json(
+                path,
+                &[
+                    ("page", page.to_string()),
+                    ("page_size", PAGE_SIZE.to_string()),
+                ],
+            )
+            .await?;
+        let rows = v
+            .get("repositories")
+            .and_then(Value::as_array)
+            .ok_or_else(|| HubError::Json(format!("{path} page {page} carried no repositories")))?
+            .iter()
+            .filter_map(|r| {
                 Some((
                     r.get("namespace")?.as_str()?.to_string(),
                     r.get("name")?.as_str()?.to_string(),
                 ))
-            }));
-            let pages = v.get("total_pages").and_then(Value::as_u64).unwrap_or(1);
-            if u64::from(page) >= pages || rows.is_empty() {
-                break;
-            }
-        }
-        Ok(out)
+            })
+            .collect();
+        Ok(RepoPage {
+            rows,
+            // A listing that doesn't say is one page long.
+            total_pages: v.get("total_pages").and_then(Value::as_u64).unwrap_or(1),
+        })
     }
 
     /// `(namespace, name, access_level)` of an existing repository the key
@@ -375,7 +400,10 @@ mod tests {
             parse_destination(" /ox/art-1.v2/ "),
             Some(("ox".into(), "art-1.v2".into()))
         );
-        for bad in ["ox", "ox/", "/art", "ox/a/b", "ox/a b", "o x/a", ""] {
+        for bad in [
+            "ox", "ox/", "/art", "ox/a/b", "ox/a b", "o x/a", "", "ox/..", "../art", "./.",
+            "ox/...",
+        ] {
             assert_eq!(parse_destination(bad), None, "{bad}");
         }
     }
@@ -560,6 +588,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn a_reply_missing_its_list_is_an_error_not_an_empty_account() {
+        let mut server = mockito::Server::new_async().await;
+        let _me = server
+            .mock("GET", "/api/authorize")
+            .with_body(json!({"user": {"username": "greg"}}).to_string())
+            .create_async()
+            .await;
+        let _orgs = server
+            .mock("GET", "/api/users/greg/orgs")
+            .with_body(json!({"status": "success"}).to_string())
+            .create_async()
+            .await;
+        let err = repos(&server).destinations().await.unwrap_err();
+        assert!(
+            matches!(err, HubError::Json(ref m) if m.contains("greg/orgs")),
+            "{err}"
+        );
     }
 
     #[tokio::test]

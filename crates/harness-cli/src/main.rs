@@ -401,7 +401,8 @@ async fn main() -> Result<()> {
     let _ = harness_runtime::connection::load();
 
     let base_url = client.base_url().to_string();
-    let mut tools = build_tool_registry(&workspace, &ui, &base_url);
+    let hub_base_url = endpoint::hub_base_url(&args);
+    let mut tools = build_tool_registry(&workspace, &ui, &hub_base_url);
     let config = agent_config(&model, context_window, &tools, &workspace, &ui);
     if args.yolo {
         // The gate is one shared Arc, so this reaches the resume factory, the
@@ -567,7 +568,13 @@ async fn main() -> Result<()> {
     custom_commands::install_for(workspace.root());
 
     // Shared per-run context (store, session, resume factory) for the REPL.
-    let ctx = ReplContext::new(&store, &session, workspace.root(), &rebuild_agent);
+    let ctx = ReplContext::new(
+        &store,
+        &session,
+        workspace.root(),
+        &hub_base_url,
+        &rebuild_agent,
+    );
 
     // Interactive TTYs use the bordered, bottom-pinned box composer (multi-line,
     // history, queue) for both idle and in-turn input. Pipes, dumb terminals, and

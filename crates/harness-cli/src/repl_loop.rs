@@ -36,6 +36,9 @@ pub(crate) type AgentFactory<'a> = dyn Fn(&str) -> Result<Agent> + 'a;
 pub(crate) struct ReplContext<'a> {
     pub(crate) store: &'a Arc<HistoryStore>,
     pub(crate) workspace_root: &'a Path,
+    /// The Oxen endpoint media and `/repository` use, even in a local-model
+    /// chat (see `endpoint::hub_base_url`).
+    pub(crate) hub_base_url: &'a str,
     session: RefCell<String>,
     resume: &'a AgentFactory<'a>,
 }
@@ -45,11 +48,13 @@ impl<'a> ReplContext<'a> {
         store: &'a Arc<HistoryStore>,
         session: &str,
         workspace_root: &'a Path,
+        hub_base_url: &'a str,
         resume: &'a AgentFactory<'a>,
     ) -> Self {
         Self {
             store,
             workspace_root,
+            hub_base_url,
             session: RefCell::new(session.to_string()),
             resume,
         }
@@ -349,7 +354,10 @@ async fn handle_line(
         }
         Command::Tasks(rest) => commands::tasks::handle_repl(rest, ui).await,
         Command::Gallery(rest) => commands::gallery::handle_repl(rest, ui)?,
-        Command::Repository(rest) => commands::repository::handle_repl(rest, ui).await?,
+        Command::Repository(rest) => {
+            commands::repository::handle_repl(rest, ctx.workspace_root, ctx.hub_base_url, ui)
+                .await?
+        }
         Command::Resume(rest) => commands::resume::handle_repl(rest, agent, ui, ctx).await?,
         Command::Fork => commands::rewind::fork_repl(agent, ui, ctx)?,
         Command::Rewind(rest) => commands::rewind::rewind_repl(rest, agent, ui, ctx)?,

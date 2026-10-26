@@ -38,6 +38,21 @@ pub(crate) struct Endpoint {
 ///
 /// `interactive` is false for the runs nobody is watching (`-p`):
 /// they never get the first-run model pick, however empty the config is.
+/// The Oxen endpoint this run talks to: --base-url > --host > the saved host
+/// override (connection.json, set via `/auth host` or the desktop Settings) >
+/// env (OXEN_BASE_URL / OXEN_HOST) > default Oxen.ai endpoint. The last three
+/// are `effective_base_url`'s resolution — the same one the desktop uses, so
+/// both hosts reach the same place. A chat on a local model still generates
+/// media and picks repositories here, never on its llama-server.
+pub(crate) fn hub_base_url(args: &Args) -> String {
+    args.base_url
+        .clone()
+        .or_else(|| args.host.as_deref().map(harness_llm::base_url_from_host))
+        .unwrap_or_else(|| {
+            harness_runtime::connection::effective_base_url(&harness_runtime::connection::load())
+        })
+}
+
 pub(crate) async fn resolve_endpoint(
     args: &Args,
     resume_meta: Option<&SessionMeta>,
@@ -53,20 +68,7 @@ pub(crate) async fn resolve_endpoint(
             .or_else(|| resume_meta.map(|m| m.model.clone()))
             .unwrap_or_else(harness_runtime::models::selected);
 
-        // Precedence for the base URL: --base-url > --host > the saved host
-        // override (connection.json, set via `/auth host` or the desktop
-        // Settings) > env (OXEN_BASE_URL / OXEN_HOST) > default Oxen.ai
-        // endpoint. The last three are `effective_base_url`'s resolution — the
-        // same one the desktop uses, so both hosts reach the same place.
-        let base_url =
-            args.base_url
-                .clone()
-                .or_else(|| args.host.as_deref().map(harness_llm::base_url_from_host))
-                .unwrap_or_else(|| {
-                    harness_runtime::connection::effective_base_url(
-                        &harness_runtime::connection::load(),
-                    )
-                });
+        let base_url = hub_base_url(args);
         let client = match OxenClient::connect(base_url.clone(), &model) {
             Ok(c) => c,
             // No key resolves anywhere — offer the masked `/auth` entry card
@@ -261,7 +263,13 @@ async fn first_run_pick(endpoint: Endpoint, args: &Args, interactive: bool, ui: 
 /// interactive question picker and the canvas document viewer wired to their CLI
 /// front ends, with the user's saved tool preferences and skills applied — the
 /// same setup the desktop app builds, so sessions behave identically.
-pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui, base_url: &str) -> ToolRegistry {
+/// `hub_base_url` is the Oxen endpoint ([`hub_base_url`]), not the chat
+/// model's: media generation always goes to the hub.
+pub(crate) fn build_tool_registry(
+    workspace: &Workspace,
+    ui: &Ui,
+    hub_base_url: &str,
+) -> ToolRegistry {
     let mut tools = ToolRegistry::default_for_workspace(workspace.clone());
     // Let the agent interview the user via the interactive terminal picker.
     tools.register_typed(harness_tools::AskUserTool::new(Arc::new(
@@ -281,7 +289,7 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui, base_url: &str
         crate::preview::SESSION_KEY,
         workspace.root(),
         harness_runtime::media::prefs_for(workspace.root()),
-        harness_runtime::media::api_for(base_url),
+        harness_runtime::media::api_for(hub_base_url),
         crate::media::refs(),
         crate::media::library(workspace.root()),
         Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
@@ -557,6 +565,33 @@ mod tests {
 
     fn args(argv: &[&str]) -> Args {
         Args::try_parse_from(argv).expect("valid arguments")
+    }
+
+    #[test]
+    fn the_hub_endpoint_follows_base_url_then_host_and_ignores_local() {
+        assert_eq!(
+            hub_base_url(&args(&[
+                "oxen-harness",
+                "--base-url",
+                "http://localhost:3001/api/ai",
+                "--host",
+                "x.test"
+            ])),
+            "http://localhost:3001/api/ai"
+        );
+        let hosted = hub_base_url(&args(&["oxen-harness", "--host", "localhost:3001"]));
+        assert_eq!(hosted, harness_llm::base_url_from_host("localhost:3001"));
+        // A local chat model changes the chat endpoint, never the hub's.
+        assert_eq!(
+            hub_base_url(&args(&[
+                "oxen-harness",
+                "--host",
+                "localhost:3001",
+                "--local",
+                "gemma"
+            ])),
+            hosted
+        );
     }
 
     fn hit(id: &str, endpoint: &str, outputs: &[&str]) -> OxenModelHit {

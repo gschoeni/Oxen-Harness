@@ -85,6 +85,10 @@ pub struct HubUploader {
     /// `playground`.
     override_repo: Option<(String, String)>,
     target: tokio::sync::OnceCell<(String, String)>,
+    /// Picked destinations already known to exist (or created here). The
+    /// hub creates a picked repository when the first generation is queued,
+    /// but references upload before that, into a repository that must exist.
+    ensured: tokio::sync::Mutex<std::collections::HashSet<(String, String)>>,
     cache_path: Option<PathBuf>,
     cache: Mutex<UploadCache>,
 }
@@ -113,6 +117,7 @@ impl HubUploader {
             api_key,
             override_repo,
             target: tokio::sync::OnceCell::new(),
+            ensured: tokio::sync::Mutex::new(std::collections::HashSet::new()),
             cache_path,
             cache: Mutex::new(cache),
         }
@@ -148,6 +153,22 @@ impl HubUploader {
             })
             .await
             .cloned()
+    }
+
+    /// Make sure a picked destination exists before uploading into it,
+    /// creating it when it doesn't (the picker already checked that the key
+    /// may). Each destination is checked once per session.
+    async fn ensure_repo(&self, target: &(String, String)) -> Result<(), UploadError> {
+        let mut ensured = self.ensured.lock().await;
+        if ensured.contains(target) {
+            return Ok(());
+        }
+        let (namespace, repo) = target;
+        if !self.repo_exists(namespace, repo).await? {
+            self.create_repo(namespace, repo).await?;
+        }
+        ensured.insert(target.clone());
+        Ok(())
     }
 
     /// The namespace a recent generation was billed to, if the queue lists
@@ -242,7 +263,10 @@ impl HubUploader {
         let total = bytes.len() as u64;
         let hash = hex(&sha2::Sha256::digest(&bytes));
         let (namespace, repo) = match target {
-            Some(target) => target,
+            Some(target) => {
+                self.ensure_repo(&target).await?;
+                target
+            }
             None => self.target().await?,
         };
 
@@ -559,6 +583,62 @@ mod tests {
         assert!(fresh
             .cached(&hex(&sha2::Sha256::digest(png())), "greg", "playground")
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn a_picked_repository_that_does_not_exist_yet_is_created_once() {
+        let mut server = mockito::Server::new_async().await;
+        let missing = server
+            .mock("GET", "/api/repos/studio/new-shots")
+            .with_status(404)
+            .expect(1)
+            .create_async()
+            .await;
+        let create = server
+            .mock("POST", "/api/repos/")
+            .match_body(mockito::Matcher::PartialJson(
+                json!({"name": "new-shots", "namespace": "studio"}),
+            ))
+            .with_body(json!({"repository": {"name": "new-shots"}}).to_string())
+            .expect(1)
+            .create_async()
+            .await;
+        // Two different files, so the second is a real upload, not a cache hit.
+        let upload = server
+            .mock("POST", "/api/repos/studio/new-shots/workbench/context")
+            .with_body(json!({"asset_path": "oxen/context/x.png"}).to_string())
+            .expect(2)
+            .create_async()
+            .await;
+        server
+            .mock(
+                "GET",
+                "/api/repos/studio/new-shots/file/presigned_url/main/oxen/context/x.png",
+            )
+            .with_body(json!({"url": "https://hub.test/x.png?oxen_signature=s"}).to_string())
+            .create_async()
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let uploader = HubUploader::new(
+            reqwest::Client::new(),
+            format!("{}/api", server.url()),
+            "k",
+            None,
+            None,
+        );
+        let target = Some(("studio".to_string(), "new-shots".to_string()));
+        for (i, bytes) in [png(), [png(), vec![0]].concat()].into_iter().enumerate() {
+            let file = dir.path().join(format!("ref{i}.png"));
+            std::fs::write(&file, bytes).unwrap();
+            uploader
+                .upload_into(target.clone(), &file, RefKind::Image, Arc::new(|_, _| {}))
+                .await
+                .unwrap();
+        }
+        missing.assert_async().await;
+        create.assert_async().await;
+        upload.assert_async().await;
     }
 
     #[tokio::test]
