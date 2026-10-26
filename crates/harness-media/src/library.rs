@@ -9,6 +9,9 @@
 //! (`HHMM-<slug>-<n>.<ext>` under a date folder) keep directory order equal
 //! to creation order and make the folder browsable without the harness.
 //!
+//! A removed item is a `{"removed": "<id>"}` row rather than a rewrite, so
+//! the manifest stays append-only for every process writing to it.
+//!
 //! In-flight jobs live in memory too, and every change bumps a watch
 //! channel hosts forward as a whole-list event.
 
@@ -304,6 +307,12 @@ pub struct MediaSpend {
     pub cost_usd: f64,
 }
 
+/// A manifest row that takes an item out of the library.
+#[derive(Serialize, Deserialize)]
+struct Removed {
+    removed: String,
+}
+
 /// The library for one project root.
 pub struct MediaLibrary {
     root: PathBuf,
@@ -425,10 +434,41 @@ impl MediaLibrary {
         Ok(())
     }
 
+    /// Take a settled item out of the library: the gallery stops showing
+    /// it. Only the manifest row goes; a saved output file is left alone.
+    pub fn remove(&self, id: &str) -> std::io::Result<()> {
+        // The change event names the chat the item came from.
+        let session = self
+            .items()
+            .into_iter()
+            .find(|i| i.id == id)
+            .map(|i| i.session)
+            .unwrap_or_default();
+        std::fs::create_dir_all(self.dir_abs())?;
+        let mut line = serde_json::to_string(&Removed {
+            removed: id.to_string(),
+        })
+        .map_err(std::io::Error::other)?;
+        line.push('\n');
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.manifest_path())?;
+        f.write_all(line.as_bytes())?;
+        self.live
+            .lock()
+            .expect("media live poisoned")
+            .retain(|i| i.id != id);
+        self.notify(&session);
+        Ok(())
+    }
+
     /// Every item the manifest knows plus what's live, folded by id (the
     /// newest state wins), newest first.
     pub fn items(&self) -> Vec<MediaItem> {
         let mut folded: Vec<MediaItem> = Vec::new();
+        let mut removed: Vec<String> = Vec::new();
         let mut fold = |item: MediaItem| match folded.iter_mut().find(|i| i.id == item.id) {
             Some(existing) => *existing = item,
             None => folded.push(item),
@@ -437,6 +477,8 @@ impl MediaLibrary {
             for line in text.lines() {
                 if let Ok(item) = serde_json::from_str::<MediaItem>(line) {
                     fold(item);
+                } else if let Ok(row) = serde_json::from_str::<Removed>(line) {
+                    removed.push(row.removed);
                 }
             }
         }
@@ -444,6 +486,7 @@ impl MediaLibrary {
         for item in &live {
             fold(item.clone());
         }
+        folded.retain(|i| !removed.contains(&i.id));
         let now = now_unix();
         for item in folded.iter_mut() {
             let running_here = live.iter().any(|l| l.id == item.id);
@@ -694,6 +737,23 @@ mod tests {
         let again = MediaLibrary::new(dir.path(), "generations");
         assert_eq!(again.items().len(), 2);
         assert_eq!(lib.in_flight(Some("s1")).len(), 1);
+    }
+
+    #[test]
+    fn a_removed_item_leaves_the_library_for_every_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = MediaLibrary::new(dir.path(), "generations");
+        lib.record(item("keep", MediaStatus::Succeeded, 1)).unwrap();
+        lib.record(item("gone", MediaStatus::Failed, 2)).unwrap();
+        let rx = lib.changes();
+        let before = rx.borrow().seq;
+
+        lib.remove("gone").unwrap();
+
+        let ids = |l: &MediaLibrary| l.items().into_iter().map(|i| i.id).collect::<Vec<_>>();
+        assert_eq!(ids(&lib), ["keep"]);
+        assert_eq!(ids(&MediaLibrary::new(dir.path(), "generations")), ["keep"]);
+        assert!(rx.borrow().seq > before, "the gallery hears about it");
     }
 
     #[test]

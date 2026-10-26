@@ -96,6 +96,7 @@ GET    /v1/sessions/{id}/tasks           the session's background shell tasks �
 POST   /v1/sessions/{id}/tasks/{task}/kill   kill one background task (its whole process group); 404 when unknown
 GET    /v1/media?root=                  the project's image/video generations, newest first → [MediaItem {id, session, kind, model, prompt, params, refs, sources, parent, path, poster, status, cost_usd, created_at, provider, …}] (`sources` traces each reference to the chat attachment, earlier generation, or project file it came from; `provider` is the hub's completed record) (defaults to the active project)
 POST   /v1/media/{generation}/cancel    cancel an in-flight generation by its hub id
+DELETE /v1/media/{generation}?root=     remove a failed, cancelled, or timed-out generation from the project's library (400 while it's rendering or once it has an output)
 GET    /v1/media/prefs                  media preferences → MediaPrefs {default_image_model, default_video_model, output_dir, per_generation_usd, per_run_usd}
 PUT    /v1/media/prefs                  replace the media preferences (applies to new/resumed chats)
 GET    /v1/media/models?kind=&refresh=  the hub's image/video models (cached a day; refresh=true refetches) → [MediaModelSummary {id, display_name, kind, price, developer, summary, inputs}]

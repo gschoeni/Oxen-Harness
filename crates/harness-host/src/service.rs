@@ -1334,6 +1334,32 @@ impl SessionService {
             .collect()
     }
 
+    /// Delete a generation that never produced anything (failed,
+    /// cancelled, timed out) from the project's library. A rendering job is
+    /// cancelled instead, and a finished one owns a file, so both refuse.
+    pub fn delete_media(&self, root: &Path, id: &str) -> Result<(), String> {
+        let library = self.media_library_for(root);
+        let item = library
+            .items()
+            .into_iter()
+            .find(|i| i.id == id)
+            .ok_or_else(|| format!("no generation {id} in {}", root.display()))?;
+        if !item.status.is_terminal() {
+            return Err(format!(
+                "generation {id} is still {}; cancel it first",
+                item.status.as_str()
+            ));
+        }
+        if item.status == harness_media::MediaStatus::Succeeded {
+            return Err(format!(
+                "generation {id} has an output; delete its file instead"
+            ));
+        }
+        library
+            .remove(id)
+            .map_err(|e| format!("couldn't delete generation {id}: {e}"))
+    }
+
     /// Cancel an in-flight generation from the client (no agent turn
     /// involved) and mark it cancelled in whichever library holds it. A row
     /// no process here is running (one left behind by a process that exited)

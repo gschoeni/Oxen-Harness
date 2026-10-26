@@ -22,7 +22,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use harness_host::{EventSink, SessionService, SessionServiceBuilder};
 use harness_protocol::ProtocolEvent;
@@ -179,6 +179,7 @@ pub fn build_router(config: ServerConfig) -> Router {
         )
         .route("/v1/media", get(list_media))
         .route("/v1/media/{generation}/cancel", post(cancel_media))
+        .route("/v1/media/{generation}", delete(delete_media))
         .route("/v1/media/prefs", get(media_prefs).put(set_media_prefs))
         .route("/v1/media/models", get(media_models))
         .route(
@@ -655,6 +656,21 @@ async fn cancel_media(
 ) -> ApiResult<StatusCode> {
     authorize(&state, &headers, None)?;
     state.service.cancel_media(&generation).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_media(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(generation): Path<String>,
+    Query(query): Query<MediaQuery>,
+) -> ApiResult<StatusCode> {
+    authorize(&state, &headers, None)?;
+    let root = match query.root {
+        Some(root) => std::path::PathBuf::from(root),
+        None => state.service.active_root().await,
+    };
+    state.service.delete_media(&root, &generation)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

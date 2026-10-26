@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useState, type PointerEvent } from "react";
 import { Button, IconButton } from "../../components/ui";
 import { ChevronLeft, ChevronRight, Images, LayoutGrid } from "lucide-react";
+import { deleteMedia } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import type { MediaItem } from "../../lib/types";
 import { isInFlight } from "../../lib/media";
@@ -287,6 +288,7 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
                 selected={item.id === selected}
                 onSelect={() => open(item.id)}
                 onCancel={() => cancelMedia(item.id)}
+                onDelete={() => deleteMedia(workspace, item.id)}
                 downloadable
               />
             ))}

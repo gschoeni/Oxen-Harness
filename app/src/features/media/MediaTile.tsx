@@ -1,12 +1,12 @@
 // One generation as a tile: the picture (a video's poster, playing muted on
 // hover), a shimmer while it renders (with a cancel), a dashed slot when it
-// failed. Shared by the Gallery dock, the project page's media card, and
+// failed (with a delete). Shared by the Gallery dock, the project page's media card, and
 // the Home page's media lens so a generation looks the same everywhere.
 // Every tile is a square filled edge to edge; the full frame is the detail
 // view's job, so the grid reads as one even contact sheet.
 
 import { useEffect, useRef, useState, type DragEvent } from "react";
-import { Check, Download, Film, TriangleAlert, X } from "lucide-react";
+import { Check, Download, Film, Trash2, TriangleAlert, X } from "lucide-react";
 import type { MediaItem } from "../../lib/types";
 import { elapsedSince, isInFlight } from "../../lib/media";
 import { useAssetSrc } from "../files/useAssetSrc";
@@ -21,6 +21,7 @@ export function MediaTile({
   selected = false,
   onSelect,
   onCancel,
+  onDelete,
   downloadable = false,
 }: {
   item: MediaItem;
@@ -31,6 +32,8 @@ export function MediaTile({
   onSelect?: () => void;
   /** Shown as a × on an in-flight tile; omit to hide the control. */
   onCancel?: () => void;
+  /** Shown as a trash button over a failed tile; omit to hide the control. */
+  onDelete?: () => Promise<void>;
   /** Show a download button over a finished tile (on hover or focus). */
   downloadable?: boolean;
 }) {
@@ -59,7 +62,7 @@ export function MediaTile({
     );
   }
   if (item.status !== "succeeded" || !item.path) {
-    return (
+    const failed = (
       <button
         ref={ref}
         type="button"
@@ -69,6 +72,13 @@ export function MediaTile({
       >
         <span className="gallery-tile-status">{item.status.replace("_", " ")}</span>
       </button>
+    );
+    if (!onDelete) return failed;
+    return (
+      <div className="gallery-tile-slot">
+        {failed}
+        <TileDelete kind={item.kind} onDelete={onDelete} />
+      </div>
     );
   }
   const tile = (
@@ -113,6 +123,31 @@ function TileDownload({ workspace, path, kind }: { workspace: string; path: stri
       title={state === "idle" || state === "saving" ? "Download" : detail}
     >
       <Icon size={12} />
+    </button>
+  );
+}
+
+function TileDelete({ kind, onDelete }: { kind: MediaItem["kind"]; onDelete: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <button
+      type="button"
+      className={`gallery-tile-delete ${error ? "failed" : ""}`}
+      onClick={() => {
+        setBusy(true);
+        setError(null);
+        // On success the tile leaves with the next library update.
+        onDelete().catch((e) => {
+          setBusy(false);
+          setError(String(e));
+        });
+      }}
+      disabled={busy}
+      aria-label={`Delete failed ${kind} generation`}
+      title={error ? `Couldn't delete: ${error}` : "Delete"}
+    >
+      {error ? <TriangleAlert size={12} /> : <Trash2 size={12} />}
     </button>
   );
 }

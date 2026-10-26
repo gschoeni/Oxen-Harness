@@ -484,7 +484,8 @@ button.gallery-inflight:hover {
   min-width: 0;
   min-height: 0;
 }
-.gallery-tile-download {
+.gallery-tile-download,
+.gallery-tile-delete {
   position: absolute;
   top: var(--space-1);
   right: var(--space-1);
@@ -508,6 +509,19 @@ button.gallery-inflight:hover {
 .gallery-tile-download:hover {
   color: var(--accent);
   border-color: var(--accent);
+}
+.gallery-tile-delete {
+  color: var(--text-secondary);
+}
+.gallery-tile-slot:hover .gallery-tile-delete,
+.gallery-tile-delete:focus-visible,
+.gallery-tile-delete.failed {
+  opacity: 1;
+}
+.gallery-tile-delete:hover,
+.gallery-tile-delete.failed {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 .gallery-tile-download.saved {
   color: var(--accent);

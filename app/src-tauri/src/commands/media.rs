@@ -21,6 +21,16 @@ pub(crate) async fn cancel_media(state: State<'_, AppState>, id: String) -> Resu
     state.cancel_media(&id).await
 }
 
+/// Delete a failed (or cancelled) generation from the project's gallery.
+#[tauri::command]
+pub(crate) fn delete_media(
+    state: State<'_, AppState>,
+    root: String,
+    id: String,
+) -> Result<(), String> {
+    state.delete_media(std::path::Path::new(&root), &id)
+}
+
 /// The saved media preferences (default models, output folder, budgets).
 #[tauri::command]
 pub(crate) fn get_media_prefs() -> harness_runtime::media::MediaPrefs {

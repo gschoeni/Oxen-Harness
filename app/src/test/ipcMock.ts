@@ -454,6 +454,7 @@ export const sampleMediaPrefs: MediaPrefs = {
 };
 export const listMedia = vi.fn(async (_root: string): Promise<MediaItem[]> => []);
 export const cancelMedia = vi.fn(async (_id: string) => {});
+export const deleteMedia = vi.fn(async (_root: string, _id: string) => {});
 export const fsDownload = vi.fn(
   async (_root: string, path: string) => `/Users/me/Downloads/${path.split("/").pop()}`,
 );
@@ -774,6 +775,7 @@ export function resetIpc() {
   setPreviewAutoVerify.mockReset().mockResolvedValue(undefined);
   listMedia.mockReset().mockResolvedValue([]);
   cancelMedia.mockReset().mockResolvedValue(undefined);
+  deleteMedia.mockReset().mockResolvedValue(undefined);
   fsDownload
     .mockReset()
     .mockImplementation(async (_root: string, path: string) => `/Users/me/Downloads/${path.split("/").pop()}`);

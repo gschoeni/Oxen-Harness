@@ -265,6 +265,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::preview::set_preview_auto_verify,
                 commands::media::list_media,
                 commands::media::cancel_media,
+                commands::media::delete_media,
                 commands::files::fs_download,
                 commands::files::fs_save_download,
                 commands::files::fs_import_file,

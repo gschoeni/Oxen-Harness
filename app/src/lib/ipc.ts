@@ -713,6 +713,8 @@ export const listMedia = (root: string) => invoke<MediaItem[]>("list_media", { r
 
 /** Cancel an in-flight generation by its hub id. */
 export const cancelMedia = (id: string) => invoke<void>("cancel_media", { id });
+/** Remove a failed, cancelled, or timed-out generation from a project's gallery. */
+export const deleteMedia = (root: string, id: string) => invoke<void>("delete_media", { root, id });
 
 export const getMediaPrefs = () => invoke<MediaPrefs>("get_media_prefs");
 

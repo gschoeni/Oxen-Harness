@@ -1601,6 +1601,52 @@ async fn cancelling_a_generation_no_process_is_running_settles_it() {
     assert_eq!(status(&service).as_deref(), Some("cancelled"));
 }
 
+#[tokio::test]
+async fn only_a_generation_that_produced_nothing_can_be_deleted() {
+    let server = mockito::Server::new_async().await;
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink, workspace.path());
+    let library = harness_media::MediaLibrary::new(workspace.path(), "generations");
+    for (id, status) in [
+        ("bad", "failed"),
+        ("busy", "processing"),
+        ("done", "succeeded"),
+    ] {
+        let row: harness_media::MediaItem = serde_json::from_value(serde_json::json!({
+            "id": id,
+            "session": "s1",
+            "kind": "image",
+            "model": "m",
+            "prompt": "an ox",
+            "status": status,
+            "path": (status == "succeeded").then_some("generations/ox.png"),
+            "created_at": harness_media::library::now_unix(),
+        }))
+        .unwrap();
+        library.record(row).unwrap();
+    }
+    let ids = |service: &SessionService| {
+        let mut ids: Vec<String> = service
+            .list_media(workspace.path())
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        ids.sort();
+        ids
+    };
+
+    service.delete_media(workspace.path(), "bad").unwrap();
+    assert_eq!(ids(&service), ["busy", "done"]);
+
+    let busy = service.delete_media(workspace.path(), "busy").unwrap_err();
+    assert!(busy.contains("cancel it first"), "{busy}");
+    let done = service.delete_media(workspace.path(), "done").unwrap_err();
+    assert!(done.contains("has an output"), "{done}");
+    assert!(service.delete_media(workspace.path(), "nope").is_err());
+    assert_eq!(ids(&service), ["busy", "done"]);
+}
+
 /// A valid 1×1 PNG, the smallest real image an attachment can carry.
 const PNG_1X1: [u8; 70] = [
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,

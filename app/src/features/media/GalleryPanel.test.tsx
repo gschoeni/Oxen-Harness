@@ -81,6 +81,30 @@ describe("GalleryPanel", () => {
     expect(screen.getByText("1 generation")).toBeInTheDocument();
   });
 
+  it("deletes a failed generation from its tile and says why when it can't", async () => {
+    render(<GalleryPanel />);
+    act(() =>
+      useStore.getState().ingestMediaChanged({
+        session: "s1",
+        root: "/w",
+        items: [item(), item({ id: "bad", status: "failed", path: null, error: "nsfw" })],
+      }),
+    );
+    // Only the failed tile offers a delete.
+    const del = screen.getByRole("button", { name: "Delete failed image generation" });
+    expect(screen.getAllByRole("button", { name: /^Delete/ })).toHaveLength(1);
+
+    ipc.deleteMedia.mockRejectedValueOnce("disk full");
+    await userEvent.click(del);
+    expect(ipc.deleteMedia).toHaveBeenCalledWith("/w", "bad");
+    expect(del).toHaveAttribute("title", "Couldn't delete: disk full");
+    expect(del).toBeEnabled();
+
+    await userEvent.click(del);
+    expect(ipc.deleteMedia).toHaveBeenCalledTimes(2);
+    expect(del).toBeDisabled();
+  });
+
   it("shows the grid or one generation, never both, and the way back keeps the tile", async () => {
     useStore.setState({ media: { "/w": [item(), item({ id: "g2", prompt: "second" })] } });
     const { container } = render(<GalleryPanel />);
