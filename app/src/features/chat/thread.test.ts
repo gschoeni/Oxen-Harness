@@ -16,9 +16,11 @@ import {
   toolEnd,
   toolStart,
   transcriptToItems,
+  userMessage,
   type Item,
 } from "./thread";
 import type { ModelErrorDetail } from "../../lib/types";
+import { splitSkillBlock } from "../../lib/skillCommand";
 
 const sampleModelError = (over: Partial<ModelErrorDetail> = {}): ModelErrorDetail => ({
   at: 1_700_000_000_000,
@@ -289,6 +291,39 @@ describe("thread: transcriptToItems", () => {
       text: "What is in this image?",
       images: [".oxen-harness/attachments/abc.png"],
     });
+  });
+});
+
+describe("thread: reopened user bubbles match the sent ones", () => {
+  const skill =
+    '/animate\n\n<skill name="animate" dir="/p/.oxen-harness/skills/animate">\nDo it well.\n</skill>';
+
+  it("shows the typed prompt and its media, not the host's chip line or the notes", () => {
+    const { text, media } = userMessage([
+      { type: "text", text: `${skill}\n\nAttached: [Video #1] clip.mp4, [Image #1] sheet.png` },
+      {
+        type: "text",
+        text: "[Attached video `clip.mp4` (1.1 MB), saved at `.oxen-harness/attachments/v.mp4`. The model can't watch video; describe what you need from it.]",
+      },
+      { type: "image_url", image_url: { url: ".oxen-harness/attachments/i.png" } },
+    ]);
+    expect(text).toBe(skill);
+    // The skill block folds into its chip again once the chip line is gone.
+    expect(splitSkillBlock(text)).toMatchObject({ text: "/animate", skill: { name: "animate" } });
+    expect(media).toEqual([".oxen-harness/attachments/v.mp4", ".oxen-harness/attachments/i.png"]);
+  });
+
+  it("drops a video note from before videos were saved, and a note standing in for no prompt", () => {
+    const old = "[Attached video `clip.mp4` (1.1 MB). The model can't watch video; describe what you need from it.]";
+    expect(userMessage([{ type: "text", text: "look\n\nAttached: [Video #1] clip.mp4" }, { type: "text", text: old }])).toEqual({
+      text: "look",
+      media: [],
+    });
+    expect(userMessage([{ type: "text", text: old }])).toEqual({ text: "", media: [] });
+  });
+
+  it("keeps a plain prompt that merely mentions a chip", () => {
+    expect(userMessage("redo [Image #1] bluer")).toEqual({ text: "redo [Image #1] bluer", media: [] });
   });
 });
 

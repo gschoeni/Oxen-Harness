@@ -34,23 +34,26 @@ use crate::bridges::{
 };
 use crate::{translate, EventSink, PendingApprovals, PendingQuestions};
 
-/// The image files a stored user message carried, in order: the parts the
-/// attachment store wrote under the project, resolved against `root`. Inline
-/// (`data:`) and remote images have no file to point a chip at.
-fn stored_images(content: &harness_llm::MessageContent, root: &Path) -> Vec<PathBuf> {
+/// The media files a stored user message carried, in order, resolved
+/// against `root`: images the attachment store wrote under the project, and
+/// the video/audio its notes name. Inline (`data:`) and remote images have
+/// no file to point a chip at.
+fn stored_media(content: &harness_llm::MessageContent, root: &Path) -> Vec<PathBuf> {
     let harness_llm::MessageContent::Parts(parts) = content else {
         return Vec::new();
     };
     parts
         .iter()
         .filter_map(|part| match part {
-            harness_llm::ContentPart::ImageUrl { image_url } => Some(image_url.url.as_str()),
-            _ => None,
-        })
-        .filter(|url| {
-            !["data:", "http://", "https://"]
-                .iter()
-                .any(|p| url.starts_with(p))
+            harness_llm::ContentPart::ImageUrl { image_url } => {
+                let url = image_url.url.as_str();
+                let remote = ["data:", "http://", "https://"]
+                    .iter()
+                    .any(|p| url.starts_with(p));
+                (!remote).then_some(url)
+            }
+            harness_llm::ContentPart::Text { text } => harness_llm::saved_media_path(text),
+            harness_llm::ContentPart::File { .. } => None,
         })
         .map(|rel| root.join(rel))
         .collect()
@@ -1220,7 +1223,7 @@ impl SessionService {
 
     /// The session's reference-media registry, created on first sight. The
     /// registry lives in memory, so a chat reopened after a restart gets its
-    /// image chips back from the stored transcript; without that, "redo
+    /// chips back from the stored transcript; without that, "redo
     /// [Image #1]" fails even though the image is right there in the history.
     fn refs_for(&self, session: &str) -> Result<Arc<harness_media::MediaRefs>, String> {
         if let Some(existing) = self
@@ -1244,7 +1247,7 @@ impl SessionService {
             .clone())
     }
 
-    /// Stage the image chips of a session's earlier turns from the full
+    /// Stage the media chips of a session's earlier turns from the full
     /// stored transcript (not the compacted context, which may have dropped
     /// the message that introduced a chip).
     fn restore_refs(&self, session: &str, refs: &harness_media::MediaRefs) -> Result<(), String> {
@@ -1262,10 +1265,10 @@ impl SessionService {
             return Ok(());
         }
         let root = PathBuf::from(store.session_meta(session).map_err(failed)?.workspace);
-        refs.restore_images(
+        refs.restore(
             turns
                 .into_iter()
-                .map(|content| (content.as_text(), stored_images(content, &root))),
+                .map(|content| (content.as_text(), stored_media(content, &root))),
         );
         Ok(())
     }

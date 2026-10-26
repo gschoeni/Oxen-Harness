@@ -189,31 +189,37 @@ impl MediaRefs {
         });
     }
 
-    /// Re-stage the image chips of an earlier run of this chat from its
+    /// Re-stage the chips of an earlier run of this chat from its
     /// transcript, so `[Image #1]` still resolves after the app restarts.
     /// Each item is one user message: its text (which names the chips) and
-    /// the stored image files it carried, in order. Only chips the message
-    /// introduces are paired, and only when they match its images one to
-    /// one; a message that leaves the pairing ambiguous is skipped rather
-    /// than guessed at. Video and audio aren't stored with the transcript,
-    /// so only images come back.
-    pub fn restore_images(&self, messages: impl IntoIterator<Item = (String, Vec<PathBuf>)>) {
-        for (text, images) in messages {
+    /// the saved media files it carried, in order. Per kind, only chips the
+    /// message introduces are paired, and only when they match its files of
+    /// that kind one to one; an ambiguous pairing is skipped rather than
+    /// guessed at. Files saved before video and audio were kept have no path
+    /// to restore, so those chips stay unresolved.
+    pub fn restore(&self, messages: impl IntoIterator<Item = (String, Vec<PathBuf>)>) {
+        for (text, files) in messages {
             let text = text.as_str();
             self.reserve_numbers_in(text);
-            let known = self.all();
-            let mut fresh: Vec<String> = Vec::new();
-            for label in chips_in(text, RefKind::Image) {
-                if !known.iter().any(|(l, _)| *l == label) && !fresh.contains(&label) {
-                    fresh.push(label);
+            for kind in [RefKind::Image, RefKind::Video, RefKind::Audio] {
+                let files: Vec<&PathBuf> = files
+                    .iter()
+                    .filter(|f| RefKind::from_path(f) == Some(kind))
+                    .collect();
+                let known = self.all();
+                let mut fresh: Vec<String> = Vec::new();
+                for label in chips_in(text, kind) {
+                    if !known.iter().any(|(l, _)| *l == label) && !fresh.contains(&label) {
+                        fresh.push(label);
+                    }
                 }
-            }
-            if fresh.is_empty() || fresh.len() != images.len() {
-                continue;
-            }
-            for (label, path) in fresh.iter().zip(images) {
-                if path.exists() {
-                    self.stage_as(label, path);
+                if fresh.is_empty() || fresh.len() != files.len() {
+                    continue;
+                }
+                for (label, path) in fresh.iter().zip(files) {
+                    if path.exists() {
+                        self.stage_as(label, path);
+                    }
                 }
             }
         }
@@ -464,16 +470,16 @@ mod tests {
     }
 
     #[test]
-    fn restores_image_chips_from_an_earlier_transcript() {
+    fn restores_chips_from_an_earlier_transcript() {
         let dir = tempfile::tempdir().unwrap();
         let stored = |name: &str| {
             let path = dir.path().join(name);
             std::fs::write(&path, b"x").unwrap();
             path
         };
-        let (first, second) = (stored("aa.png"), stored("bb.png"));
+        let (first, second, clip) = (stored("aa.png"), stored("bb.png"), stored("cc.mp4"));
         let refs = MediaRefs::new();
-        refs.restore_images(
+        refs.restore(
             [
                 (
                     "draw this\n\nAttached: [Image #1] hero.png",
@@ -495,7 +501,13 @@ mod tests {
                     vec![dir.path().join("gone.png")],
                 ),
                 // Video isn't stored with the transcript, but its number is taken.
-                ("Attached: [Video #2] clip.mp4", vec![]),
+                // A saved video pairs with its own kind, beside an image.
+                (
+                    "Attached: [Video #1] clip.mp4, [Image #6] style.png",
+                    vec![clip.clone(), stored("dd.png")],
+                ),
+                // Video from before it was saved: no file, but its number is taken.
+                ("Attached: [Video #2] old.mp4", vec![]),
             ]
             .map(|(text, images)| (text.to_string(), images)),
         );
@@ -504,9 +516,11 @@ mod tests {
         assert_eq!(refs.lookup("[Image #2]"), Some(second));
         assert_eq!(refs.lookup("[Image #3]"), None);
         assert_eq!(refs.lookup("[Image #5]"), None);
+        assert_eq!(refs.lookup("[Video #1]"), Some(clip));
+        assert_eq!(refs.lookup("[Image #6]"), Some(dir.path().join("dd.png")));
         // New attachments number past every chip the transcript mentions,
         // restored or not, so no label the model has seen gets reused.
-        assert_eq!(refs.stage("/tmp/new.png").as_deref(), Some("[Image #6]"));
+        assert_eq!(refs.stage("/tmp/new.png").as_deref(), Some("[Image #7]"));
         assert_eq!(refs.stage("/tmp/new.mp4").as_deref(), Some("[Video #3]"));
     }
 

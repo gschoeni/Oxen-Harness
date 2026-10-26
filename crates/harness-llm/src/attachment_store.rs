@@ -95,10 +95,10 @@ impl AttachmentStore {
     }
 
     /// Convert an attachment into the content part to store on a message. Images
-    /// and PDFs are written to disk and referenced by relative path; text, video,
-    /// and opaque files keep the same inline rendering as
-    /// [`Attachment::to_content_part`] (their content is either small text the
-    /// model reads directly or just a note).
+    /// and PDFs are written to disk and referenced by relative path. Video and
+    /// audio are written to disk too, but the model still gets a note (it can't
+    /// take them directly) that names the saved path. Text and opaque files keep
+    /// the same inline rendering as [`Attachment::to_content_part`].
     pub fn store_part(&self, att: &Attachment) -> std::io::Result<ContentPart> {
         match att.kind {
             AttachmentKind::Image => {
@@ -108,6 +108,10 @@ impl AttachmentStore {
             AttachmentKind::Pdf => {
                 let rel = self.store_bytes(&att.extension(), &att.bytes)?;
                 Ok(ContentPart::file(att.filename.clone(), rel))
+            }
+            AttachmentKind::Video | AttachmentKind::Audio => {
+                let rel = self.store_bytes(&att.extension(), &att.bytes)?;
+                Ok(ContentPart::text(att.media_note(Some(&rel))))
             }
             _ => Ok(att.to_content_part()),
         }
@@ -269,6 +273,32 @@ mod tests {
             },
             other => panic!("expected parts, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn video_is_saved_and_its_note_names_the_saved_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(dir.path());
+        let att = Attachment::from_bytes("clip.mp4", vec![0, 0, 0, 24]).unwrap();
+
+        let text = match store.store_part(&att).unwrap() {
+            ContentPart::Text { text } => text,
+            other => panic!("expected a note, got {other:?}"),
+        };
+        let rel = text
+            .split("saved at `")
+            .nth(1)
+            .and_then(|rest| rest.split('`').next())
+            .expect("the note names the saved path");
+        assert!(rel.starts_with(".oxen-harness/attachments/") && rel.ends_with(".mp4"));
+        assert!(dir.path().join(rel).is_file());
+        assert!(text.starts_with("[Attached video `clip.mp4`"), "{text}");
+        assert!(text.contains("can't watch video"), "{text}");
+        assert_eq!(crate::saved_media_path(&text), Some(rel));
+        assert_eq!(
+            crate::saved_media_path("[Attached video `a.mp4` (1 KB). x]"),
+            None
+        );
     }
 
     /// An opaque PNG just past the edge limit, so it gets downscaled and

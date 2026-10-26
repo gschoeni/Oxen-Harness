@@ -322,6 +322,33 @@ impl Attachment {
         }
     }
 
+    /// The note that stands in for a video or audio file the model can't take
+    /// directly. `saved` is where the attachment store put the file (relative
+    /// to the project), which lets the model pass it to a generation tool and
+    /// a reopened chat show it again. The desktop transcript reads that path
+    /// back out of this exact shape (`savedMediaPath` in `thread.ts`).
+    pub(crate) fn media_note(&self, saved: Option<&str>) -> String {
+        let (word, cant) = match self.kind {
+            AttachmentKind::Audio => (
+                "audio",
+                "The model can't listen to it; it can be used as a reference track for \
+                 video generation.",
+            ),
+            _ => (
+                "video",
+                "The model can't watch video; describe what you need from it.",
+            ),
+        };
+        let size = format_bytes(self.bytes.len() as u64);
+        match saved {
+            Some(rel) => format!(
+                "[Attached {word} `{}` ({size}), saved at `{rel}`. {cant}]",
+                self.filename
+            ),
+            None => format!("[Attached {word} `{}` ({size}). {cant}]", self.filename),
+        }
+    }
+
     /// The content part to send to the model. Images become `image_url` parts and
     /// PDFs `file` parts; videos and unknown types become a text note, since the
     /// model can't view them directly.
@@ -342,18 +369,9 @@ impl Attachment {
                     format_bytes(self.bytes.len() as u64),
                 ))
             }
-            AttachmentKind::Video => ContentPart::text(format!(
-                "[Attached video `{}` ({}). The model can't watch video; \
-                 describe what you need from it.]",
-                self.filename,
-                format_bytes(self.bytes.len() as u64),
-            )),
-            AttachmentKind::Audio => ContentPart::text(format!(
-                "[Attached audio `{}` ({}). The model can't listen to it; it can be used \
-                 as a reference track for video generation.]",
-                self.filename,
-                format_bytes(self.bytes.len() as u64),
-            )),
+            AttachmentKind::Video | AttachmentKind::Audio => {
+                ContentPart::text(self.media_note(None))
+            }
             AttachmentKind::Other => ContentPart::text(format!(
                 "[Attached file `{}` ({}), which isn't a supported image/PDF.]",
                 self.filename,
@@ -361,6 +379,18 @@ impl Attachment {
             )),
         }
     }
+}
+
+/// The project-relative path a video/audio note says its file was saved at
+/// (see [`Attachment::media_note`]); `None` for any other text.
+pub fn saved_media_path(note: &str) -> Option<&str> {
+    let rest = note
+        .strip_prefix("[Attached video `")
+        .or_else(|| note.strip_prefix("[Attached audio `"))?;
+    rest.split_once("saved at `")?
+        .1
+        .split_once('`')
+        .map(|(p, _)| p)
 }
 
 /// Whether a file's bytes look like a readable text document rather than an

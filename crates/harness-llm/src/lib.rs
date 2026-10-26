@@ -12,7 +12,9 @@ pub mod client;
 pub mod stream;
 pub mod types;
 
-pub use attachment::{mime_for_extension, Attachment, AttachmentError, AttachmentKind};
+pub use attachment::{
+    mime_for_extension, saved_media_path, Attachment, AttachmentError, AttachmentKind,
+};
 pub use attachment_store::{
     base64_len, hydrate_content, hydrate_content_bounded, hydrated_data_uri_len, AttachmentStore,
     MAX_OUTBOUND_ATTACHMENT_BYTES, MAX_OUTBOUND_ATTACHMENT_PARTS,

@@ -38,12 +38,35 @@ function contentText(content: MessageContent | null | undefined): string {
   return "";
 }
 
-/** Image attachment references on a message (the stored relative path or URL). */
-function imageRefs(content: MessageContent | null | undefined): string[] {
-  if (Array.isArray(content)) {
-    return content.flatMap((p) => (p.type === "image_url" ? [p.image_url.url] : []));
-  }
-  return [];
+/** Mirror of the chip line the host appends to a prompt with media
+ *  (`run_turn`): `\n\nAttached: [Image #1] a.png, [Video #1] b.mp4`. The
+ *  model reads it; the bubble showed the prompt as typed. */
+const ATTACHED_LINE = /\n\nAttached: \[(?:Image|Video|Audio) #\d+\][^\n]*$/;
+
+/** Mirror of the note standing in for a video or audio attachment
+ *  (`Attachment::media_note`), capturing where the file was saved. */
+const SAVED_MEDIA_NOTE = /^\[Attached (?:video|audio) `[^`]*` \([^)]*\), saved at `([^`]+)`/;
+
+/** A stored user message as the bubble showed it when it was sent: the prompt
+ *  as typed, and its media (images, plus video/audio the notes say were saved)
+ *  in attachment order. The other text parts are notes and documents the
+ *  attachments became for the model. */
+export function userMessage(content: MessageContent | null | undefined): {
+  text: string;
+  media: string[];
+} {
+  if (!Array.isArray(content)) return { text: contentText(content).replace(ATTACHED_LINE, ""), media: [] };
+  let text = "";
+  const media: string[] = [];
+  content.forEach((p, i) => {
+    if (p.type === "image_url") media.push(p.image_url.url);
+    if (p.type !== "text") return;
+    const saved = SAVED_MEDIA_NOTE.exec(p.text);
+    if (saved) media.push(saved[1]);
+    // The prompt leads; with no prompt typed, the first part is already a note.
+    else if (i === 0 && !p.text.startsWith("[Attached ")) text = p.text.replace(ATTACHED_LINE, "");
+  });
+  return { text, media };
 }
 
 export type Item =
@@ -119,9 +142,9 @@ export function transcriptToItems(messages: ChatMessage[]): Item[] {
       // generation, a screenshot): the tool card already shows the picture,
       // so the synthetic bubble would only repeat it.
       if (isToolImageDelivery(text)) continue;
-      const images = imageRefs(m.content);
-      if (text || images.length)
-        items.push({ id: uid(), kind: "user", text, images: images.length ? images : undefined });
+      const { text: typed, media } = userMessage(m.content);
+      if (typed || media.length)
+        items.push({ id: uid(), kind: "user", text: typed, images: media.length ? media : undefined });
     } else if (m.role === "assistant") {
       const text = contentText(m.content);
       if (text) items.push({ id: uid(), kind: "assistant", text, streaming: false });
@@ -386,7 +409,7 @@ export function endsMidTurn(messages: ChatMessage[]): boolean {
  *  prompt). Empty if there is none. */
 export function lastUserText(messages: ChatMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") return contentText(messages[i].content);
+    if (messages[i].role === "user") return userMessage(messages[i].content).text;
   }
   return "";
 }
