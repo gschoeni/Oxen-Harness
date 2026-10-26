@@ -1,6 +1,6 @@
 //! The local-model catalog table and the download progress bar.
 
-use super::{flourish, Ui};
+use super::Ui;
 
 /// One row in the `models list` table (a catalog or downloaded model + its
 /// local status).
@@ -13,72 +13,85 @@ pub struct ModelRow {
     pub note: String,
 }
 
-/// Render the local-model catalog as an aligned, themed table.
-pub fn models_table(ui: &Ui, rows: &[ModelRow], total_disk: &str, dir: &str) -> String {
-    let id_w = rows
-        .iter()
-        .map(|r| r.id.len())
-        .chain(std::iter::once("Model".len()))
-        .max()
-        .unwrap_or(5);
-    let par_w = rows
-        .iter()
-        .map(|r| r.params.len())
-        .chain(std::iter::once("Params".len()))
-        .max()
-        .unwrap_or(6);
-    let size_w = rows
-        .iter()
-        .map(|r| r.size.len())
-        .chain(std::iter::once("Size".len()))
-        .max()
-        .unwrap_or(4);
+/// Notes wrap at this width even on a wide terminal: a short measure reads
+/// faster than a line stretched across the screen.
+const NOTE_MAX_WIDTH: usize = 88;
 
-    let mut out = String::from("\n");
-    out.push_str(&format!(
-        "  {}  {}  {}   {}\n",
-        ui.title(&format!("{:<id_w$}", "Model")),
-        ui.title(&format!("{:<par_w$}", "Params")),
-        ui.title(&format!("{:>size_w$}", "Size")),
-        ui.title("Status"),
-    ));
-    out.push_str(&flourish(ui));
-    for r in rows {
-        let status = if r.installed {
-            ui.green("● on disk")
-        } else {
-            ui.dim("○ not yet")
-        };
+/// Render the local-model catalog: installed models first, then the ones
+/// available to pull, each with its note wrapped beneath it. `width` is the
+/// terminal width in cells.
+pub fn models_table(
+    ui: &Ui,
+    rows: &[ModelRow],
+    total_disk: &str,
+    dir: &str,
+    width: usize,
+) -> String {
+    let col = |f: fn(&ModelRow) -> usize| rows.iter().map(f).max().unwrap_or(0);
+    let widths = (
+        col(|r| r.id.len()),
+        col(|r| r.params.len()),
+        col(|r| r.size.len()),
+    );
+    let note_width = width.min(NOTE_MAX_WIDTH).saturating_sub(4);
+
+    let (on_disk, available): (Vec<&ModelRow>, Vec<&ModelRow>) =
+        rows.iter().partition(|r| r.installed);
+
+    let mut out = String::new();
+    for (heading, group) in [("On disk", &on_disk), ("Available", &available)] {
+        if group.is_empty() {
+            continue;
+        }
         out.push_str(&format!(
-            "  {}  {}  {}   {}\n",
-            ui.cream(&format!("{:<id_w$}", r.id)),
-            ui.brown(&format!("{:<par_w$}", r.params)),
-            ui.cream(&format!("{:>size_w$}", r.size)),
-            status,
+            "\n  {}  {}\n",
+            ui.title(heading),
+            ui.dim(&format!("({})", group.len()))
         ));
-        out.push_str(&format!(
-            "  {}\n",
-            ui.dim(&format!("{:id_w$}   {}", "", r.note))
-        ));
+        for r in group {
+            out.push('\n');
+            out.push_str(&model_entry(ui, r, widths, note_width));
+        }
     }
+
     out.push('\n');
     out.push_str(&format!(
-        "  {} {}\n",
+        "  {} {}   {} {}\n",
         ui.brown(&ui.theme().voice.label_disk_used),
         ui.cream(total_disk),
-    ));
-    out.push_str(&format!(
-        "  {} {}\n",
         ui.brown(&ui.theme().voice.label_models_dir),
         ui.dim(dir)
     ));
-    out.push('\n');
     out.push_str(&format!(
         "  {}\n",
         ui.dim(
-            "Pull one with  oxen-harness models pull <Model>   ·   ride it with  --local <Model>"
+            "Pull one with  oxen-harness models pull <Model>   ·   run it with  --local <Model>"
         ),
     ));
+    out
+}
+
+/// One model: a marker, id, params, and size on the first line, then the
+/// note wrapped and indented under the id.
+fn model_entry(
+    ui: &Ui,
+    r: &ModelRow,
+    (id_w, par_w, size_w): (usize, usize, usize),
+    note_width: usize,
+) -> String {
+    let (marker, id) = if r.installed {
+        (ui.green("●"), ui.green(&format!("{:<id_w$}", r.id)))
+    } else {
+        (ui.dim("○"), ui.cream(&format!("{:<id_w$}", r.id)))
+    };
+    let mut out = format!(
+        "  {marker} {id}  {}  {}\n",
+        ui.brown(&format!("{:<par_w$}", r.params)),
+        ui.cream(&format!("{:>size_w$}", r.size)),
+    );
+    for line in crate::picker::wrap(&r.note, note_width) {
+        out.push_str(&format!("    {}\n", ui.dim(&line)));
+    }
     out
 }
 
@@ -121,30 +134,50 @@ mod tests {
         assert!(unknown.contains("?%"));
     }
 
+    fn row(id: &str, installed: bool, note: &str) -> ModelRow {
+        ModelRow {
+            id: id.to_string(),
+            params: "8B".to_string(),
+            size: "5.0 GB".to_string(),
+            installed,
+            note: note.to_string(),
+        }
+    }
+
     #[test]
-    fn models_table_lists_rows_and_disk_usage() {
+    fn models_table_groups_installed_first_and_shows_disk_usage() {
         let ui = Ui::plain();
         let rows = [
-            ModelRow {
-                id: "qwen3-8b".to_string(),
-                params: "8B".to_string(),
-                size: "5.0 GB".to_string(),
-                installed: true,
-                note: "all-rounder".to_string(),
-            },
-            ModelRow {
-                id: "qwen3-32b".to_string(),
-                params: "32B".to_string(),
-                size: "20 GB".to_string(),
-                installed: false,
-                note: "heaviest".to_string(),
-            },
+            row("qwen3-32b", false, "heaviest"),
+            row("qwen3-8b", true, "all-rounder"),
         ];
-        let table = models_table(&ui, &rows, "5.0 GB", "/home/me/.oxen-harness/models");
-        assert!(table.contains("qwen3-8b"));
-        assert!(table.contains("● on disk"));
-        assert!(table.contains("○ not yet"));
+        let table = models_table(&ui, &rows, "5.0 GB", "/home/me/.oxen-harness/models", 80);
+        let on_disk = table.find("On disk").expect("on-disk heading");
+        let available = table.find("Available").expect("available heading");
+        let installed = table.find("● qwen3-8b").expect("installed row");
+        let missing = table.find("○ qwen3-32b").expect("available row");
+        assert!(on_disk < installed && installed < available && available < missing);
         assert!(table.contains("5.0 GB"));
         assert!(!table.contains("\x1b["));
+    }
+
+    #[test]
+    fn models_table_wraps_long_notes_under_the_model() {
+        let ui = Ui::plain();
+        let note = "word ".repeat(40);
+        let table = models_table(&ui, &[row("m", false, &note)], "0 B", "/m", 60);
+        let note_lines: Vec<&str> = table.lines().filter(|l| l.contains("word")).collect();
+        assert!(note_lines.len() > 1, "long note should wrap");
+        assert!(note_lines
+            .iter()
+            .all(|l| l.starts_with("    ") && l.len() <= 60));
+    }
+
+    #[test]
+    fn models_table_skips_an_empty_group() {
+        let ui = Ui::plain();
+        let table = models_table(&ui, &[row("m", false, "n")], "0 B", "/m", 80);
+        assert!(!table.contains("On disk"));
+        assert!(table.contains("Available"));
     }
 }

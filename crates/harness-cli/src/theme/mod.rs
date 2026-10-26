@@ -380,8 +380,8 @@ pub fn divider(ui: &Ui) -> String {
     ui.dim(&"─".repeat(width))
 }
 
-/// The scrollwork divider, echoing the game's title screen. Shared by the
-/// startup banner and the local-model table.
+/// The scrollwork divider, echoing the game's title screen. Drawn under the
+/// startup banner.
 fn flourish(ui: &Ui) -> String {
     format!(
         "  {}\n",

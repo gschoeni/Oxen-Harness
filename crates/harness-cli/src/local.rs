@@ -133,6 +133,7 @@ fn list(store: &ModelStore, ui: &Ui) -> Result<()> {
             &rows,
             &format_bytes(store.total_disk_used()),
             &store.dir().display().to_string(),
+            crossterm::terminal::size().map_or(80, |(cols, _)| cols as usize),
         )
     );
 
