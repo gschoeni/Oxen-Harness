@@ -5,7 +5,7 @@
 //! Used by the media uploader, which needs the account's `playground`. The
 //! endpoints, all under the hub's `/api` root:
 //!
-//! - `GET /users/me` → `{ user: { username } }`
+//! - `GET /authorize` → `{ user: { username } }` (the key's own user)
 //! - `GET /repos/{namespace}/{name}` → 2xx when it exists and the key can
 //!   see it, 403/404 otherwise
 //! - `POST /repos/` `{ name, namespace?, description, visibility }` →
@@ -75,22 +75,28 @@ impl HubRepos {
         &self.api_key
     }
 
-    /// The username this API key belongs to.
+    /// The username this API key belongs to. `GET /authorize` answers with
+    /// the signed-in user; there is no `/users/me` (that path is the profile
+    /// of a user literally named "me"). A key the hub doesn't accept gets a
+    /// 400 there, not a 401.
     pub async fn whoami(&self) -> Result<String, HubError> {
         let res = send(
             self.http
-                .get(format!("{}/users/me", self.api_root))
+                .get(format!("{}/authorize", self.api_root))
                 .bearer_auth(&self.api_key)
                 .timeout(Duration::from_secs(30)),
             true,
         )
         .await?;
+        if res.status() == reqwest::StatusCode::BAD_REQUEST {
+            return Err(HubError::Unauthorized);
+        }
         let v: Value = body(res).await?;
         v.get("user")
             .and_then(|u| u.get("username"))
             .and_then(Value::as_str)
             .map(str::to_string)
-            .ok_or_else(|| HubError::Json("users/me carried no username".into()))
+            .ok_or_else(|| HubError::Json("authorize carried no username".into()))
     }
 
     /// Whether `namespace/name` exists and this key can see it (a 403 reads
@@ -246,12 +252,27 @@ mod tests {
     async fn whoami_reads_the_username() {
         let mut server = mockito::Server::new_async().await;
         let _m = server
-            .mock("GET", "/api/users/me")
+            .mock("GET", "/api/authorize")
             .match_header("authorization", "Bearer key")
             .with_body(r#"{"user":{"username":"greg"}}"#)
             .create_async()
             .await;
         assert_eq!(repos(&server).whoami().await.unwrap(), "greg");
+    }
+
+    #[tokio::test]
+    async fn whoami_reads_a_rejected_key_as_unauthorized() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/api/authorize")
+            .with_status(400)
+            .with_body(r#"{"error":"unauthenticated"}"#)
+            .create_async()
+            .await;
+        assert!(matches!(
+            repos(&server).whoami().await,
+            Err(HubError::Unauthorized)
+        ));
     }
 
     #[tokio::test]

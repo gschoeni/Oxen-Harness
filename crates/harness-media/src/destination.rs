@@ -11,7 +11,7 @@
 //!
 //! The endpoints, under the hub's `/api` root:
 //!
-//! - `GET /users/me` → `{ user: { username } }`
+//! - `GET /authorize` → `{ user: { username } }` (the key's own user)
 //! - `GET /users/{username}/orgs` → `{ organizations: [{ name, access_level }] }`
 //! - `GET /repos/{namespace}?page=&page_size=` → `{ repositories: [{ name }], total_pages }`
 //! - `GET /user/repos?page=&page_size=` → repositories the user was added to
@@ -357,7 +357,7 @@ mod tests {
     async fn me(server: &mut mockito::Server, orgs: Value) -> Vec<mockito::Mock> {
         vec![
             server
-                .mock("GET", "/api/users/me")
+                .mock("GET", "/api/authorize")
                 .with_body(json!({"user": {"username": "greg"}}).to_string())
                 .create_async()
                 .await,

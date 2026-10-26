@@ -6,7 +6,7 @@
 //! hub's own workbench keeps uploads — through the workbench context
 //! endpoint, then presigned into a public, expiring URL:
 //!
-//! 1. `GET /api/users/me` → the account's namespace (once per session).
+//! 1. `GET /api/authorize` → the account's namespace (once per session).
 //! 2. `GET /api/repos/{ns}/playground` → exists, or `POST /api/repos/`
 //!    creates it (private, `workbench: true`).
 //! 3. `POST /api/repos/{ns}/{repo}/workbench/context` multipart `file`
@@ -121,7 +121,7 @@ impl HubUploader {
     /// The `(namespace, repo)` uploads go to, resolved once: the override,
     /// else the account's playground. The hub has no "my namespaces" call
     /// and a user's playground can live under an organization, so the
-    /// namespace is tried in order — the username from `users/me`, then the
+    /// namespace is tried in order — the username from `authorize`, then the
     /// namespace the queue last billed to (`target_namespace` of a recent
     /// generation) — and the first one whose playground answers wins; with
     /// none, the playground is created under the username.
@@ -459,7 +459,7 @@ mod tests {
     async fn uploads_presigns_reports_progress_and_reuses() {
         let mut server = mockito::Server::new_async().await;
         let me = server
-            .mock("GET", "/api/users/me")
+            .mock("GET", "/api/authorize")
             .with_body(json!({"user": {"username": "greg"}}).to_string())
             .expect(1)
             .create_async()
@@ -560,7 +560,7 @@ mod tests {
     async fn falls_back_to_the_namespace_the_queue_bills_to() {
         let mut server = mockito::Server::new_async().await;
         server
-            .mock("GET", "/api/users/me")
+            .mock("GET", "/api/authorize")
             .with_body(json!({"user": {"username": "ME"}}).to_string())
             .create_async()
             .await;
@@ -608,7 +608,7 @@ mod tests {
     async fn a_key_that_cannot_create_gets_a_settings_hint() {
         let mut server = mockito::Server::new_async().await;
         server
-            .mock("GET", "/api/users/me")
+            .mock("GET", "/api/authorize")
             .with_body(json!({"user": {"username": "ME"}}).to_string())
             .create_async()
             .await;

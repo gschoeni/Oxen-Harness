@@ -2749,7 +2749,7 @@ mod tests {
         assert_eq!(ctx.refs.stage(&reference).as_deref(), Some("[Image #1]"));
         let upload_mocks = vec![
             server
-                .mock("GET", "/api/users/me")
+                .mock("GET", "/api/authorize")
                 .with_body(json!({"user": {"username": "greg"}}).to_string())
                 .create_async()
                 .await,
