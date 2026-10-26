@@ -143,6 +143,50 @@ impl MediaModel {
         !self.slots(kind).is_empty()
     }
 
+    /// The field `name` when it takes media: a known reference slot or any
+    /// URI-typed field, like seedance's `input_face_images`, which no
+    /// default slot targets but a call can fill through `extra`.
+    pub fn media_field(&self, name: &str) -> Option<Slot> {
+        let prop = self.property(name)?;
+        let is_uri = |v: &Value| v.get("format").and_then(Value::as_str) == Some("uri");
+        let known = [IMAGE_SLOTS, IMAGE_TAIL_SLOTS, VIDEO_SLOTS, AUDIO_SLOTS]
+            .iter()
+            .any(|slots| slots.contains(&name));
+        (known || is_uri(prop) || prop.get("items").is_some_and(is_uri)).then(|| Slot {
+            name: name.to_string(),
+            array: self.is_array(name),
+        })
+    }
+
+    /// Every media field, in schema order.
+    pub fn media_fields(&self) -> Vec<Slot> {
+        let Some(props) = self.properties() else {
+            return Vec::new();
+        };
+        let mut names: Vec<&String> = props.keys().collect();
+        names.sort_by_key(|n| (x_order(&props[n.as_str()]), (*n).clone()));
+        names
+            .into_iter()
+            .filter_map(|n| self.media_field(n))
+            .collect()
+    }
+
+    /// Where `field`'s references fall in the prompt's `@Image1` numbering.
+    /// Seedance numbers face media before the rest of its kind, declared by
+    /// the prompt's `x-media-references` groups; fields it doesn't list
+    /// come after, in the order they were filled.
+    pub fn ref_rank(&self, field: &str) -> usize {
+        self.property("prompt")
+            .and_then(|p| p.pointer("/x-media-references/groups"))
+            .and_then(Value::as_array)
+            .and_then(|groups| {
+                groups
+                    .iter()
+                    .position(|g| g.get("field").and_then(Value::as_str) == Some(field))
+            })
+            .unwrap_or(usize::MAX)
+    }
+
     /// Whether the prompt addresses references as `@Image1` / `@Video1`
     /// (seedance, kling, nano-banana) rather than by position.
     pub fn prompt_uses_at_refs(&self) -> bool {
@@ -265,23 +309,17 @@ impl MediaModel {
             .map(|r| r.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
         let mut ordered: Vec<(&String, &Value)> = props.iter().collect();
-        ordered.sort_by_key(|(name, v)| {
-            (
-                v.get("x-order").and_then(Value::as_i64).unwrap_or(i64::MAX),
-                (*name).clone(),
-            )
-        });
+        ordered.sort_by_key(|(name, v)| (x_order(v), (*name).clone()));
         let mut out = String::new();
         for (name, v) in ordered {
-            let ty = v
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or(if v.get("items").is_some() {
-                    "array"
-                } else {
-                    "any"
-                });
-            let mut spec = ty.to_string();
+            let types = schema_types(v);
+            let mut spec = if !types.is_empty() {
+                types.join("|")
+            } else if v.get("items").is_some() {
+                "array".to_string()
+            } else {
+                "any".to_string()
+            };
             if let Some(items) = v.get("items") {
                 if let Some(t) = items.get("type").and_then(Value::as_str) {
                     spec = format!("array of {t}");
@@ -318,6 +356,22 @@ impl MediaModel {
         }
         out.trim_end().to_string()
     }
+}
+
+/// A property's JSON Schema `type`, which may be one name or a list
+/// (seedance 2.5's duration is `["integer", "string"]`: seconds or "auto").
+pub fn schema_types(prop: &Value) -> Vec<&str> {
+    match prop.get("type") {
+        Some(Value::String(t)) => vec![t.as_str()],
+        Some(Value::Array(ts)) => ts.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn x_order(prop: &Value) -> i64 {
+    prop.get("x-order")
+        .and_then(Value::as_i64)
+        .unwrap_or(i64::MAX)
 }
 
 fn value_short(v: &Value) -> String {

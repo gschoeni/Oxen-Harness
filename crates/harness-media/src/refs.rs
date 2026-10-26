@@ -55,6 +55,22 @@ impl RefKind {
         }
     }
 
+    /// The kind a request field takes, read from its name
+    /// (`input_face_images`, `tail_image_url`, `input_audios`); `None` for a
+    /// field whose name doesn't say.
+    pub fn from_field_name(name: &str) -> Option<Self> {
+        let name = name.to_ascii_lowercase();
+        if name.contains("image") || name.contains("frame") {
+            Some(Self::Image)
+        } else if name.contains("video") {
+            Some(Self::Video)
+        } else if name.contains("audio") {
+            Some(Self::Audio)
+        } else {
+            None
+        }
+    }
+
     pub fn from_path(path: &Path) -> Option<Self> {
         path.extension()
             .and_then(|e| e.to_str())

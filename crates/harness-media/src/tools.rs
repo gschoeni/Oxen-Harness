@@ -378,6 +378,24 @@ fn describe_model(model: &MediaModel) -> String {
             }
         ));
     }
+    let defaults: Vec<String> = [RefKind::Image, RefKind::Video, RefKind::Audio]
+        .into_iter()
+        .flat_map(|k| model.slots(k))
+        .map(|s| s.name)
+        .collect();
+    let others: Vec<String> = model
+        .media_fields()
+        .into_iter()
+        .filter(|f| !defaults.contains(&f.name))
+        .map(|f| format!("{}{}", f.name, if f.array { "[]" } else { "" }))
+        .collect();
+    if !others.is_empty() {
+        out.push_str(&format!(
+            "Other media fields: {}. Fill them in `extra` with the same labels or project \
+             paths `refs` takes; they're uploaded the same way.\n",
+            others.join(", ")
+        ));
+    }
     out.push_str("Parameters (typed ones go in the tool's own fields; the rest in `extra`):\n");
     out.push_str(&model.schema_summary());
     out
@@ -622,9 +640,38 @@ struct Prepared {
     params: Map<String, Value>,
     /// The references to upload, already checked against the model's slots.
     resolved: Vec<ResolvedRef>,
+    /// Media fields the call filled through `extra`; their files are in
+    /// `resolved` too, and go to these fields rather than the default slots.
+    fields: Vec<MediaField>,
     notes: Vec<String>,
     per_output: Option<f64>,
     slug: String,
+}
+
+/// A media field named in `extra` (seedance's `input_face_images`, which
+/// the default slots never target), in the order the call listed it.
+#[derive(Debug)]
+struct MediaField {
+    name: String,
+    array: bool,
+    entries: Vec<FieldEntry>,
+}
+
+#[derive(Debug)]
+enum FieldEntry {
+    /// Already hosted (an http(s) or data: URI); sent as given.
+    Hosted(String),
+    /// A label or project file, uploaded with the other references.
+    File(PathBuf),
+}
+
+impl MediaField {
+    fn files(&self) -> impl Iterator<Item = &PathBuf> {
+        self.entries.iter().filter_map(|e| match e {
+            FieldEntry::File(p) => Some(p),
+            FieldEntry::Hosted(_) => None,
+        })
+    }
 }
 
 async fn run_generation(
@@ -698,6 +745,7 @@ async fn run_generation(
     let prompt = place_refs(
         &prepared.model,
         &prepared.resolved,
+        &prepared.fields,
         &urls,
         &req.prompt,
         &mut body,
@@ -1069,7 +1117,7 @@ fn prepare(
             ref_names.push(label);
         }
     }
-    let resolved = refs::resolve(&ref_names, &ctx.refs, &ctx.root)?;
+    let mut resolved = refs::resolve(&ref_names, &ctx.refs, &ctx.root)?;
 
     let mut body = Map::new();
     let mut params = Map::new();
@@ -1086,21 +1134,22 @@ fn prepare(
         let value = coerce(&model, name, value.clone())?;
         params.insert((*name).to_string(), value);
     }
-    // Extra params: must exist in the schema; reference slots go via `refs`.
-    let ref_slots: Vec<String> = [RefKind::Image, RefKind::Video, RefKind::Audio]
-        .into_iter()
-        .flat_map(|k| model.slots(k))
-        .map(|s| s.name)
-        .collect();
+    // Extra params: must exist in the schema. A media field takes labels and
+    // project paths like `refs` does, and they're uploaded the same way.
+    let mut fields = Vec::new();
     for (name, value) in &req.extra {
         if name == "prompt" || name == "model" || name == "num_generations" {
             continue;
         }
-        if ref_slots.contains(name) {
-            return Err(ToolError::InvalidArguments(format!(
-                "`extra.{name}` takes reference media — pass files through `refs` instead \
-                 (labels like [Image #1] or project paths) and they land there"
-            )));
+        if let Some(slot) = model.media_field(name) {
+            let (field, files) = media_field(ctx, &model, slot, value)?;
+            for r in files {
+                if !resolved.iter().any(|known| known.path == r.path) {
+                    resolved.push(r);
+                }
+            }
+            fields.push(field);
+            continue;
         }
         if !model.has_param(name) {
             return Err(ToolError::InvalidArguments(format!(
@@ -1115,7 +1164,7 @@ fn prepare(
 
     // The model must have a field for every kind of reference given —
     // checked now, before anything is uploaded.
-    validate_slots(&model, &resolved, catalog)?;
+    validate_slots(&model, &unclaimed(&resolved, &fields), catalog)?;
     for (k, v) in &params {
         body.insert(k.clone(), v.clone());
     }
@@ -1133,10 +1182,96 @@ fn prepare(
         body,
         params,
         resolved,
+        fields,
         notes,
         per_output,
         slug,
     })
+}
+
+/// Read a media field from `extra`: hosted URIs pass through, anything else
+/// resolves as a reference (label or project path) and is checked against
+/// the kind the field's name says it takes.
+fn media_field(
+    ctx: &MediaContext,
+    model: &MediaModel,
+    slot: crate::catalog::Slot,
+    value: &Value,
+) -> Result<(MediaField, Vec<ResolvedRef>), ToolError> {
+    let name = &slot.name;
+    let values: Vec<&str> = match value {
+        Value::String(s) => vec![s.as_str()],
+        Value::Array(items) => items
+            .iter()
+            .map(|v| {
+                v.as_str().ok_or_else(|| {
+                    ToolError::InvalidArguments(format!(
+                        "`extra.{name}` takes labels, project paths, or URLs (got {v})"
+                    ))
+                })
+            })
+            .collect::<Result<_, _>>()?,
+        other => {
+            return Err(ToolError::InvalidArguments(format!(
+                "`extra.{name}` takes labels, project paths, or URLs (got {other})"
+            )))
+        }
+    };
+    if !slot.array && values.len() > 1 {
+        return Err(ToolError::InvalidArguments(format!(
+            "`extra.{name}` takes one reference for {}; {} were given",
+            model.id,
+            values.len()
+        )));
+    }
+    let mut entries = Vec::new();
+    let mut files = Vec::new();
+    for v in values {
+        let v = v.trim();
+        if is_hosted(v) {
+            entries.push(FieldEntry::Hosted(v.to_string()));
+            continue;
+        }
+        for r in refs::resolve(&[v.to_string()], &ctx.refs, &ctx.root)? {
+            if let Some(want) = RefKind::from_field_name(name).filter(|k| *k != r.kind) {
+                return Err(ToolError::InvalidArguments(format!(
+                    "`extra.{name}` takes {} references; {v} is {}",
+                    want.word().to_ascii_lowercase(),
+                    r.kind.word().to_ascii_lowercase()
+                )));
+            }
+            entries.push(FieldEntry::File(r.path.clone()));
+            files.push(r);
+        }
+    }
+    let field = MediaField {
+        name: name.clone(),
+        array: slot.array,
+        entries,
+    };
+    Ok((field, files))
+}
+
+fn is_hosted(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    ["http://", "https://", "data:"]
+        .iter()
+        .any(|scheme| lower.starts_with(scheme))
+}
+
+/// The references no `extra` media field claimed: these go to the model's
+/// default slots.
+fn unclaimed(resolved: &[ResolvedRef], fields: &[MediaField]) -> Vec<ResolvedRef> {
+    resolved
+        .iter()
+        .filter(|r| {
+            !fields
+                .iter()
+                .flat_map(MediaField::files)
+                .any(|p| *p == r.path)
+        })
+        .cloned()
+        .collect()
 }
 
 /// The user's default model for `kind` — unless it is hosted and there is
@@ -1396,20 +1531,63 @@ fn source_of(ctx: &MediaContext, r: &ResolvedRef, stored: StoredRef) -> MediaSou
     }
 }
 
+/// One request field's references, as sent.
+struct Placed<'a> {
+    field: String,
+    kind: Option<RefKind>,
+    array: bool,
+    /// Each URL, with the reference it came from when it was a file.
+    values: Vec<(String, Option<&'a ResolvedRef>)>,
+}
+
 /// Put uploaded references into the model's fields and rewrite `[Image #N]`
-/// mentions to the model's own convention. Slots were validated in
-/// [`validate_slots`]; a model that can't take a kind never reaches here.
+/// mentions to the model's own convention. Fields named in `extra` take
+/// their own files; the rest go to the default slots, which were validated
+/// in [`validate_slots`], so a model that can't take a kind never gets here.
 fn place_refs(
     model: &MediaModel,
     resolved: &[ResolvedRef],
+    fields: &[MediaField],
     urls: &std::collections::HashMap<PathBuf, String>,
     prompt: &str,
     body: &mut Map<String, Value>,
 ) -> Result<String, ToolError> {
-    let mut prompt = prompt.to_string();
-    let at_style = model.prompt_uses_at_refs();
+    let find = |path: &PathBuf| -> Result<(String, &ResolvedRef), ToolError> {
+        let r = resolved
+            .iter()
+            .find(|r| r.path == *path)
+            .ok_or_else(|| ToolError::Execution(format!("{} was not resolved", path.display())))?;
+        let url = urls
+            .get(path)
+            .cloned()
+            .ok_or_else(|| ToolError::Execution(format!("{} was not uploaded", r.filename)))?;
+        Ok((url, r))
+    };
+
+    let mut placed: Vec<Placed> = Vec::new();
+    for f in fields {
+        let mut values = Vec::new();
+        for entry in &f.entries {
+            values.push(match entry {
+                FieldEntry::Hosted(url) => (url.clone(), None),
+                FieldEntry::File(path) => {
+                    let (url, r) = find(path)?;
+                    (url, Some(r))
+                }
+            });
+        }
+        let kind = RefKind::from_field_name(&f.name)
+            .or_else(|| values.iter().find_map(|(_, r)| r.map(|r| r.kind)));
+        placed.push(Placed {
+            field: f.name.clone(),
+            kind,
+            array: f.array,
+            values,
+        });
+    }
+    let defaults = unclaimed(resolved, fields);
     for kind in [RefKind::Image, RefKind::Video, RefKind::Audio] {
-        let of_kind: Vec<&ResolvedRef> = resolved.iter().filter(|r| r.kind == kind).collect();
+        let of_kind: Vec<&ResolvedRef> = defaults.iter().filter(|r| r.kind == kind).collect();
         if of_kind.is_empty() {
             continue;
         }
@@ -1421,32 +1599,55 @@ fn place_refs(
                 kind.word().to_ascii_lowercase()
             )));
         };
-        let mut uris = Vec::new();
+        let mut values = Vec::new();
         for r in &of_kind {
-            let url = urls
-                .get(&r.path)
-                .cloned()
-                .ok_or_else(|| ToolError::Execution(format!("{} was not uploaded", r.filename)))?;
-            uris.push(url);
+            let (url, r) = find(&r.path)?;
+            values.push((url, Some(r)));
         }
         if primary.array {
-            body.insert(
-                primary.name.clone(),
-                Value::Array(uris.into_iter().map(Value::String).collect()),
-            );
+            placed.push(Placed {
+                field: primary.name.clone(),
+                kind: Some(kind),
+                array: true,
+                values,
+            });
         } else {
-            let mut it = uris.into_iter();
-            if let Some(first) = it.next() {
-                body.insert(primary.name.clone(), Value::String(first));
-            }
-            if let (Some(second), Some(tail)) = (it.next(), slots.get(1)) {
-                body.insert(tail.name.clone(), Value::String(second));
+            // A single-URI model: the first image is the first frame and a
+            // second one the tail frame.
+            for (slot, value) in slots.iter().zip(values) {
+                placed.push(Placed {
+                    field: slot.name.clone(),
+                    kind: Some(kind),
+                    array: false,
+                    values: vec![value],
+                });
             }
         }
-        // "[Image #2]" in the prompt → "@Image1" (its position among the
-        // images sent) or "reference image 1".
-        for (i, r) in of_kind.iter().enumerate() {
-            if let Some(label) = &r.label {
+    }
+
+    for p in &placed {
+        let urls: Vec<Value> = p
+            .values
+            .iter()
+            .map(|(url, _)| Value::String(url.clone()))
+            .collect();
+        if p.array {
+            body.insert(p.field.clone(), Value::Array(urls));
+        } else if let Some(first) = urls.into_iter().next() {
+            body.insert(p.field.clone(), first);
+        }
+    }
+
+    // "[Image #2]" in the prompt → "@Image1" (its position among the images
+    // sent, counted in the model's own field order) or "reference image 1".
+    let mut prompt = prompt.to_string();
+    let at_style = model.prompt_uses_at_refs();
+    for kind in [RefKind::Image, RefKind::Video, RefKind::Audio] {
+        let mut of_kind: Vec<&Placed> = placed.iter().filter(|p| p.kind == Some(kind)).collect();
+        of_kind.sort_by_key(|p| model.ref_rank(&p.field));
+        let sent = of_kind.iter().flat_map(|p| p.values.iter());
+        for (i, (_, r)) in sent.enumerate() {
+            if let Some(label) = r.and_then(|r| r.label.as_ref()) {
                 let replacement = if at_style {
                     format!("@{}{}", kind.word(), i + 1)
                 } else {
@@ -1466,17 +1667,23 @@ fn coerce(model: &MediaModel, name: &str, value: Value) -> Result<Value, ToolErr
     let Some(prop) = model.property(name) else {
         return Ok(value);
     };
-    let ty = prop.get("type").and_then(Value::as_str).unwrap_or("");
-    let value = match (ty, &value) {
-        ("integer", Value::Number(n)) => Value::from(n.as_f64().unwrap_or(0.0).round() as i64),
-        ("integer", Value::String(s)) if s.trim().parse::<f64>().is_ok() => {
-            Value::from(s.trim().parse::<f64>().unwrap_or(0.0).round() as i64)
+    // A union type (`["integer", "string"]`: seconds or "auto") takes a
+    // value of any of its types as is, except that a number still becomes
+    // an integer: the tool's duration is a float, and providers reject 5.0.
+    let types = crate::catalog::schema_types(prop);
+    let takes = |t: &str| types.contains(&t);
+    let parsed = |s: &str| s.trim().parse::<f64>().ok();
+    let value = match &value {
+        Value::Number(n) if takes("integer") && !takes("number") => {
+            Value::from(n.as_f64().unwrap_or(0.0).round() as i64)
         }
-        ("number", Value::String(s)) if s.trim().parse::<f64>().is_ok() => {
-            Value::from(s.trim().parse::<f64>().unwrap_or(0.0))
-        }
-        ("string", Value::Number(n)) => Value::String(n.to_string()),
-        ("boolean", Value::String(s)) => Value::Bool(matches!(s.trim(), "true" | "yes" | "on")),
+        Value::Number(n) if types == ["string"] => Value::String(n.to_string()),
+        Value::String(s) if !takes("string") => match parsed(s) {
+            Some(f) if takes("integer") => Value::from(f.round() as i64),
+            Some(f) if takes("number") => Value::from(f),
+            _ if takes("boolean") => Value::Bool(matches!(s.trim(), "true" | "yes" | "on")),
+            _ => value,
+        },
         _ => value,
     };
     if let Some(choices) = prop.get("enum").and_then(Value::as_array) {
@@ -2212,8 +2419,207 @@ mod tests {
                 "input_image": {"type": "string"},
                 "tail_image_url": {"type": "string"},
                 "duration": {"type": "integer", "minimum": 4, "maximum": 8, "default": 8},
-                "resolution": {"type": "string", "enum": ["720p", "1080p"], "default": "720p"}}}}
+                "resolution": {"type": "string", "enum": ["720p", "1080p"], "default": "720p"}}}},
+            // Seedance 2.5 reference-to-video's shape: face media in their
+            // own fields, numbered before the rest of their kind, and a
+            // duration that is seconds or "auto".
+            {"id": "seedance-ref", "endpoint": "/videos/generate",
+             "pricing": {"cost_per_second": 0.1},
+             "request_schema": {"properties": {
+                "prompt": {"type": "string", "x-order": 0,
+                    "description": "Use @Image1, @Video1 to reference inputs.",
+                    "x-media-references": {"groups": [
+                        {"field": "input_face_images", "pattern": "[Image {n}]"},
+                        {"field": "input_images", "pattern": "[Image {n}]"},
+                        {"field": "input_face_videos", "pattern": "[Video {n}]"},
+                        {"field": "input_videos", "pattern": "[Video {n}]"}]}},
+                "input_face_images": {"type": "array", "x-order": 1,
+                    "items": {"type": "string", "format": "uri"}},
+                "input_images": {"type": "array", "x-order": 2,
+                    "items": {"type": "string", "format": "uri"}},
+                "input_face_videos": {"type": "array", "x-order": 3,
+                    "items": {"type": "string", "format": "uri"}},
+                "input_videos": {"type": "array", "x-order": 4,
+                    "items": {"type": "string", "format": "uri"}},
+                "duration": {"type": ["integer", "string"], "minimum": 4, "maximum": 30,
+                    "default": "auto", "x-order": 9}}}}
         ]}))
+    }
+
+    fn video_request(model: &str, prompt: &str) -> GenerateRequest {
+        GenerateRequest {
+            kind: MediaKind::Video,
+            prompt: prompt.into(),
+            model: Some(model.into()),
+            refs: vec![],
+            typed: vec![],
+            count: 1,
+            name: None,
+            parent: None,
+            extra: Map::new(),
+            wait: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_union_typed_duration_is_sent_as_an_integer() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for(
+            dir.path(),
+            "http://127.0.0.1:9/api/ai",
+            Arc::new(NoConfirmSink),
+            MediaPrefs::default(),
+        );
+        let cat = catalog();
+        // The tool's duration is a float; seedance rejects `5.0`.
+        let req = GenerateRequest {
+            typed: vec![("duration", json!(5.0))],
+            ..video_request("seedance-ref", "x")
+        };
+        let p = prepare(&ctx, &cat, &req).unwrap();
+        assert!(p.body["duration"].is_i64(), "{}", p.body["duration"]);
+        assert_eq!(p.body["duration"], json!(5));
+
+        // The string half of the union passes through, and the range still
+        // holds for numbers.
+        let mut extra = Map::new();
+        extra.insert("duration".into(), json!("auto"));
+        let p = prepare(
+            &ctx,
+            &cat,
+            &GenerateRequest {
+                extra,
+                ..video_request("seedance-ref", "x")
+            },
+        )
+        .unwrap();
+        assert_eq!(p.body["duration"], json!("auto"));
+        let req = GenerateRequest {
+            typed: vec![("duration", json!(45.0))],
+            ..video_request("seedance-ref", "x")
+        };
+        let err = prepare(&ctx, &cat, &req).unwrap_err();
+        assert!(err.to_string().contains("≤ 30"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn extra_media_fields_take_project_files_and_number_faces_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_for(
+            dir.path(),
+            "http://127.0.0.1:9/api/ai",
+            Arc::new(NoConfirmSink),
+            MediaPrefs::default(),
+        );
+        std::fs::create_dir_all(dir.path().join("keys")).unwrap();
+        for name in ["keys/k0.png", "keys/k1.png", "bg.png"] {
+            std::fs::write(dir.path().join(name), png()).unwrap();
+        }
+        std::fs::write(dir.path().join("motion.mp4"), b"mp4").unwrap();
+        assert_eq!(
+            ctx.refs.stage(dir.path().join("bg.png")).as_deref(),
+            Some("[Image #1]")
+        );
+        let cat = catalog();
+
+        // The session that failed: keyframes and the motion clip as project
+        // paths in the face fields, the background as an ordinary ref.
+        let mut extra = Map::new();
+        extra.insert(
+            "input_face_images".into(),
+            json!(["keys/k0.png", "https://cdn.test/hosted.png", "keys/k1.png"]),
+        );
+        extra.insert("input_face_videos".into(), json!(["motion.mp4"]));
+        let req = GenerateRequest {
+            extra,
+            ..video_request(
+                "seedance-ref",
+                "the room from [Image #1], moving like @Video1",
+            )
+        };
+        let p = prepare(&ctx, &cat, &req).unwrap();
+        assert_eq!(p.resolved.len(), 4, "every local file is uploaded");
+        assert!(
+            p.body.get("input_face_images").is_none()
+                && p.params.get("input_face_images").is_none(),
+            "media fields land after upload and never reach the manifest params"
+        );
+
+        let urls: std::collections::HashMap<PathBuf, String> = p
+            .resolved
+            .iter()
+            .map(|r| (r.path.clone(), format!("https://hub.test/{}", r.filename)))
+            .collect();
+        let mut body = p.body.clone();
+        let prompt = place_refs(
+            &p.model,
+            &p.resolved,
+            &p.fields,
+            &urls,
+            &req.prompt,
+            &mut body,
+        )
+        .unwrap();
+        assert_eq!(
+            body["input_face_images"],
+            json!([
+                "https://hub.test/k0.png",
+                "https://cdn.test/hosted.png",
+                "https://hub.test/k1.png"
+            ])
+        );
+        assert_eq!(
+            body["input_face_videos"],
+            json!(["https://hub.test/motion.mp4"])
+        );
+        assert_eq!(body["input_images"], json!(["https://hub.test/bg.png"]));
+        // Face images are numbered first, so the background is the fourth.
+        assert_eq!(prompt, "the room from @Image4, moving like @Video1");
+
+        // A label named in a face field goes there and nowhere else, even
+        // when the prompt mentions it too.
+        let mut extra = Map::new();
+        extra.insert("input_face_images".into(), json!(["[Image #1]"]));
+        let req = GenerateRequest {
+            extra,
+            ..video_request("seedance-ref", "the boy in [Image #1]")
+        };
+        let p = prepare(&ctx, &cat, &req).unwrap();
+        let urls = p
+            .resolved
+            .iter()
+            .map(|r| (r.path.clone(), "https://hub.test/bg.png".to_string()))
+            .collect();
+        let mut body = p.body.clone();
+        let prompt = place_refs(
+            &p.model,
+            &p.resolved,
+            &p.fields,
+            &urls,
+            &req.prompt,
+            &mut body,
+        )
+        .unwrap();
+        assert_eq!(
+            body["input_face_images"],
+            json!(["https://hub.test/bg.png"])
+        );
+        assert!(body.get("input_images").is_none(), "{body:?}");
+        assert_eq!(prompt, "the boy in @Image1");
+
+        // A clip in an image field is refused before anything is uploaded.
+        let mut extra = Map::new();
+        extra.insert("input_face_images".into(), json!(["motion.mp4"]));
+        let err = prepare(
+            &ctx,
+            &cat,
+            &GenerateRequest {
+                extra,
+                ..video_request("seedance-ref", "x")
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("takes image references"), "{err}");
     }
 
     struct RecordingAsker(Mutex<Vec<String>>, bool);
@@ -2561,7 +2967,12 @@ mod tests {
             .invoke(json!({"prompt": "x", "model": "flux-mini", "extra": {"input_image": ["[Image #1]"]}}))
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("through `refs`"), "{err}");
+        // A media field in `extra` resolves its labels like `refs` does.
+        assert!(
+            err.to_string()
+                .contains("isn't an attachment the user has provided"),
+            "{err}"
+        );
         let err = tool
             .invoke(json!({"prompt": "x", "model": "veo"}))
             .await
@@ -2623,7 +3034,15 @@ mod tests {
             })
             .collect();
         let mut body = p.body.clone();
-        let prompt = place_refs(&p.model, &p.resolved, &urls, &req.prompt, &mut body).unwrap();
+        let prompt = place_refs(
+            &p.model,
+            &p.resolved,
+            &p.fields,
+            &urls,
+            &req.prompt,
+            &mut body,
+        )
+        .unwrap();
         assert_eq!(
             body["input_image"],
             json!("https://hub.test/f/0.png?oxen_signature=s")
@@ -2674,7 +3093,15 @@ mod tests {
             .map(|r| (r.path.clone(), "https://hub.test/a.png".to_string()))
             .collect();
         let mut body = p.body.clone();
-        let prompt = place_refs(&p.model, &p.resolved, &urls, &req.prompt, &mut body).unwrap();
+        let prompt = place_refs(
+            &p.model,
+            &p.resolved,
+            &p.fields,
+            &urls,
+            &req.prompt,
+            &mut body,
+        )
+        .unwrap();
         assert_eq!(prompt, "like @Image1 with @Image1 style");
         assert_eq!(body["input_image"].as_array().unwrap().len(), 1);
     }
@@ -3092,6 +3519,15 @@ mod tests {
         assert!(out.contains("veo (video model, $0.10/s)"), "{out}");
         assert!(out.contains("image → input_image, tail_image_url"), "{out}");
         assert!(out.contains("duration: integer 4–8 (default 8)"), "{out}");
+        let out = tool.invoke(json!({"id": "seedance-ref"})).await.unwrap();
+        assert!(
+            out.contains("Other media fields: input_face_images[], input_face_videos[]."),
+            "{out}"
+        );
+        assert!(
+            out.contains("duration: integer|string 4–30 (default auto)"),
+            "{out}"
+        );
         let err = tool.invoke(json!({"id": "flux"})).await.unwrap_err();
         assert!(err.to_string().contains("did you mean: flux-mini"), "{err}");
     }
