@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "harness-agent"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-compress",
@@ -864,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "harness-cli"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "arboard",
@@ -909,7 +909,7 @@ dependencies = [
 
 [[package]]
 name = "harness-compress"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -919,7 +919,7 @@ dependencies = [
 
 [[package]]
 name = "harness-config"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "dirs",
  "dotenvy",
@@ -931,7 +931,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "harness-crash"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "libc",
  "tempfile",
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "harness-host"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-agent",
@@ -979,7 +979,7 @@ dependencies = [
 
 [[package]]
 name = "harness-http"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "fastrand",
  "httpdate",
@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "harness-llm"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "base64",
  "dirs",
@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "harness-local"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "flate2",
  "futures-util",
@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "harness-media"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "harness-media-local"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "base64",
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "harness-oxen"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "tempfile",
  "thiserror 2.0.18",
@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "harness-permissions"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "dirs",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "harness-preview"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-config",
@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "harness-protocol"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "harness-tools",
  "schemars",
@@ -1135,7 +1135,7 @@ dependencies = [
 
 [[package]]
 name = "harness-review"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "harness-agent",
  "harness-config",
@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "harness-runtime"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "globset",
@@ -1179,7 +1179,7 @@ dependencies = [
 
 [[package]]
 name = "harness-server"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "axum",
  "futures-core",
@@ -1206,7 +1206,7 @@ dependencies = [
 
 [[package]]
 name = "harness-store"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "harness-core",
  "libc",
@@ -1221,7 +1221,7 @@ dependencies = [
 
 [[package]]
 name = "harness-study"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "harness-config",
@@ -1238,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "harness-theme"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "harness-config",
  "harness-core",
@@ -1251,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "harness-tools"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "globset",
@@ -1281,7 +1281,7 @@ dependencies = [
 
 [[package]]
 name = "harness-update"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "flate2",
  "harness-http",
