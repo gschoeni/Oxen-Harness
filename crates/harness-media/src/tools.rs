@@ -224,8 +224,9 @@ impl MediaContext {
             .map(|a| QueueClient::new(&a.base_url, a.api_key.clone()))
     }
 
-    /// The hub uploader for reference media (the user's playground repo,
-    /// or the `hub_repo` they configured).
+    /// The hub uploader for reference media. Each upload is told the
+    /// current [`MediaContext::hub_target`]; without one it falls back to
+    /// the account's playground.
     fn uploader(&self) -> Option<Arc<crate::upload::HubUploader>> {
         let api = self.api()?;
         Some(

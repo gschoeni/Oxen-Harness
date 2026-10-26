@@ -47,18 +47,7 @@ impl ProjectConfig {
 /// Parse `namespace/name` (surrounding whitespace and slashes tolerated;
 /// nested paths, empty halves, and a bare name are rejected).
 pub fn parse_remote_repo(raw: &str) -> Option<(String, String)> {
-    let raw = raw.trim().trim_matches('/');
-    let (ns, name) = raw.split_once('/')?;
-    let ok = !ns.is_empty()
-        && !name.is_empty()
-        && !name.contains('/')
-        && ns
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-    ok.then(|| (ns.to_string(), name.to_string()))
+    harness_media::parse_destination(raw)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
