@@ -23,8 +23,22 @@ export function ThreadStatus() {
     void refreshThreads();
   }, [sessionId, refreshThreads]);
 
+  const running = useStore((s) => sessionId !== undefined && s.runStatus[sessionId] === "running");
+  const waiting = useStore((s) => sessionId !== undefined && s.approvals[sessionId] !== undefined);
+
   const thread = useThreads().get(sessionId ?? "");
-  if (!thread) return null;
+  if (!thread) {
+    // The snapshot refreshes when a turn ends, so a new chat's first turn
+    // isn't in it yet — and that turn can run (or sit on a question) for a
+    // long time. Its id and that it's running are all the row needs.
+    if (!sessionId || !running) return null;
+    return (
+      <div className="chat-status" aria-label="This chat's standing">
+        <SessionIdChip id={sessionId} />
+        <span className="chat-status-text">{waiting ? "waiting on your approval" : "running"}</span>
+      </div>
+    );
+  }
 
   return (
     <div className="chat-status" aria-label="This chat's standing">

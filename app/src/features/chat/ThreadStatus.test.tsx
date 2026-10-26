@@ -96,6 +96,22 @@ describe("the chat's status strip", () => {
     expect(ipc.sessionFinish).not.toHaveBeenCalled();
   });
 
+  it("shows a new chat's first turn before the snapshot knows the thread", () => {
+    // The snapshot only refreshes when a turn ends, so a brand-new chat's
+    // first turn — which can run (or sit on a question) for a long time —
+    // isn't in it yet.
+    seedChat(entry({ id: "sess-0123456789abcdef" }));
+    useStore.setState({
+      threadsSnapshot: { entries: [], running: [] },
+      runStatus: { "sess-0123456789abcdef": "running" },
+    });
+    vi.mocked(ipc.threadsSnapshot).mockResolvedValue({ entries: [], running: [] });
+    render(<ThreadStatus />);
+    expect(screen.getByRole("button", { name: /copy session id sess-0123456789abcdef/i })).toBeTruthy();
+    expect(screen.getByText("running")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Mark finished" })).toBeNull();
+  });
+
   it("renders nothing for a session the snapshot doesn't know", () => {
     useStore.setState({ threadsSnapshot: { entries: [], running: [] } });
     const { container } = render(<ThreadStatus />);
