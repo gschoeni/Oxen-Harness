@@ -99,6 +99,9 @@ POST   /v1/media/{generation}/cancel    cancel an in-flight generation by its hu
 GET    /v1/media/prefs                  media preferences → MediaPrefs {default_image_model, default_video_model, output_dir, per_generation_usd, per_run_usd}
 PUT    /v1/media/prefs                  replace the media preferences (applies to new/resumed chats)
 GET    /v1/media/models?kind=&refresh=  the hub's image/video models (cached a day; refresh=true refetches) → [MediaModelSummary {id, kind, price, developer, summary, inputs}]
+GET    /v1/media/destination?root=      where the project's generations go on the hub → MediaDestination {repo, source: project|project_remote|global|hub_default, web_url}
+PUT    /v1/media/destination            {root, repo} — send the project's generations to `namespace/name` (400 unless the key can write there or the hub will create it); repo null clears the choice; applies to the next generation in open chats too
+GET    /v1/media/namespaces             where the key can send generations → [MediaNamespace {name, kind: user|org|shared, role, can_create, repos}]
 POST   /v1/sessions/{id}/agents/{agent}/cancel     stop one running lane (its id rides on `fleet.agent`); the rest of its fleet carries on; 404 once it has ended
 POST   /v1/sessions/{id}/agents/{agent}/interject  {text} → {accepted} — steer one running lane
 GET    /v1/sessions/{id}/agents/{agent}/patch     saved isolated patch as a JSON string

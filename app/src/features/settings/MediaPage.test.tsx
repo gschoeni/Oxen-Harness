@@ -77,7 +77,7 @@ describe("MediaPage", () => {
 
   it("saves the hub repo and the Oxen commit switch", async () => {
     render(<MediaPage />);
-    const repo = (await screen.findByLabelText("Hub repo")) as HTMLInputElement;
+    const repo = (await screen.findByLabelText("Default hub repo")) as HTMLInputElement;
     expect(repo.value).toBe("");
     await userEvent.type(repo, "/ox/my-generations/");
     await userEvent.tab();

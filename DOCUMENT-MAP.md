@@ -246,3 +246,10 @@ When adding a new file to the project, update this document map.
 - `crates/harness-cli/src/memory_gauge.rs` — the `🧠` meter segment and the generations block's memory line.
 - `app/src/lib/memory.ts`, `features/chat/MemoryMeter.tsx`, `features/chat/MemoryNotices.tsx`, `features/media/GenerationProgress.tsx`, `features/settings/LocalMediaSection.tsx` — the desktop's memory meter, notice banner, per-render progress, and Settings → Media → On-device models.
 
+
+## Media destination switching (2026-10-25)
+
+- `crates/harness-media/src/destination.rs` — what the API key can send generations to (`HubRepos::destinations`: own namespace, admin/editor orgs, shared repos) and `check_destination` (write access or a creatable namespace); `MediaContext::with_destination` re-reads the target per generation.
+- `crates/harness-runtime/src/media.rs` — `destination_for` (project media repo → project remote → global → hub default), `choose_destination` (hub check + save), `destination_resolver`.
+- `crates/harness-cli/src/commands/media_repo.rs` — `/media-repo`: show, namespace → repository picker, `ns/name` to switch, `clear`.
+- `app/src/features/media/MediaDestinationPicker.tsx` — the Gallery's "Saving to" picker; `/media-repo` in the desktop opens it or switches directly. Host: `media_destination`/`set_media_destination`/`media_namespaces` (Tauri commands, `/v1/media/destination`, `/v1/media/namespaces`).

@@ -30,6 +30,11 @@ pub struct ProjectConfig {
     /// the agent is told about it in the system prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_repo: Option<String>,
+    /// Where this project's generated media goes on the hub, as
+    /// `namespace/name`, when it isn't the remote repository. Switched from
+    /// the gallery or `/media-repo`; see `media::destination_for`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_repo: Option<String>,
 }
 
 impl ProjectConfig {
@@ -98,20 +103,8 @@ pub fn save(root: &Path, config: &ProjectConfig) -> Result<ProjectConfig, Runtim
     if saved.name.is_empty() {
         saved.name = folder_name(root);
     }
-    // The remote is normalized to `namespace/name` or dropped: a value that
-    // can't be parsed would only ever produce broken URLs downstream.
-    saved.remote_repo = match saved.remote_repo.as_deref().map(str::trim) {
-        None | Some("") => None,
-        Some(raw) => Some(
-            parse_remote_repo(raw)
-                .map(|(ns, name)| format!("{ns}/{name}"))
-                .ok_or_else(|| {
-                    RuntimeError::Invalid(format!(
-                        "remote repository must look like `namespace/name`, got `{raw}`"
-                    ))
-                })?,
-        ),
-    };
+    saved.remote_repo = normalize_repo("remote repository", saved.remote_repo.as_deref())?;
+    saved.media_repo = normalize_repo("media repository", saved.media_repo.as_deref())?;
     harness_config::write_versioned(&config_path(root), SCHEMA_VERSION, &saved)?;
     Ok(saved)
 }
@@ -126,6 +119,31 @@ pub fn set_remote_repo(root: &Path, remote: Option<&str>) -> Result<ProjectConfi
         .filter(|r| !r.is_empty())
         .map(str::to_string);
     save(root, &config)
+}
+
+/// Set (or, with `None`/empty, clear) where the project's generated media
+/// goes, keeping every other field. Callers check the hub first; this only
+/// checks the shape.
+pub fn set_media_repo(root: &Path, repo: Option<&str>) -> Result<ProjectConfig, RuntimeError> {
+    let mut config = load(root);
+    config.media_repo = repo.map(str::to_string);
+    save(root, &config)
+}
+
+/// A repository setting normalized to `namespace/name`, or dropped when
+/// blank: a value that can't be parsed would only ever produce broken URLs
+/// downstream, so it is refused.
+fn normalize_repo(what: &str, value: Option<&str>) -> Result<Option<String>, RuntimeError> {
+    match value.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(raw) => parse_remote_repo(raw)
+            .map(|(ns, name)| Some(format!("{ns}/{name}")))
+            .ok_or_else(|| {
+                RuntimeError::Invalid(format!(
+                    "{what} must look like `namespace/name`, got `{raw}`"
+                ))
+            }),
+    }
 }
 
 pub fn add_context(root: &Path, sources: &[PathBuf]) -> Result<ProjectConfig, RuntimeError> {
@@ -395,7 +413,7 @@ mod tests {
             description: "Build a calm writing space.".into(),
             instructions: "Prefer accessible, keyboard-first interactions.".into(),
             context: vec![],
-            remote_repo: None,
+            ..ProjectConfig::default()
         };
 
         let saved = save(&root, &config).unwrap();
@@ -478,7 +496,7 @@ mod tests {
                 description: "Ship the onboarding flow.".into(),
                 instructions: "Use plain language and preserve accessibility.".into(),
                 context: vec![],
-                remote_repo: None,
+                ..ProjectConfig::default()
             },
         )
         .unwrap();

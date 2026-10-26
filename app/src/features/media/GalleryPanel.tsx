@@ -23,6 +23,7 @@ import { isInFlight } from "../../lib/media";
 import { useFsChangedUnder } from "../files/useFsChanged";
 import { MediaTile } from "./MediaTile";
 import { GenerationDetail } from "./GenerationDetail";
+import { MediaDestinationPicker } from "./MediaDestinationPicker";
 import "./media.css";
 
 type Filter = "all" | "image" | "video" | "rendering";
@@ -245,6 +246,12 @@ export function GalleryPanel({ onResizeStart }: { onResizeStart?: (e: PointerEve
             This chat
           </button>
         </div>
+        {workspace && (
+          <div className="gallery-dest">
+            <span className="gallery-dest-label">Saving to</span>
+            <MediaDestinationPicker root={workspace} />
+          </div>
+        )}
       </header>
       {filter === "rendering" && inFlight > 0 && (
         <div className="gallery-rendering-bar">

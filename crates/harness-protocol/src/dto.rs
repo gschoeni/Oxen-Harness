@@ -439,6 +439,41 @@ pub struct MediaModelSummary {
     pub inputs: Vec<String>,
 }
 
+/// Where a project's generated media goes on the hub (`GET
+/// /v1/media/destination`, the gallery's destination picker).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MediaDestination {
+    /// `namespace/name`. For `hub_default` it is the account's
+    /// `<username>/playground` when the hub answered, else `None`.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// What decided it: `project` (picked for this project),
+    /// `project_remote` (the project's remote repository), `global`
+    /// (Settings → Media → Hub repo), or `hub_default`.
+    pub source: String,
+    /// The repository's page on the hub, when `repo` is known.
+    #[serde(default)]
+    pub web_url: Option<String>,
+}
+
+/// A namespace generations can go to, for the destination picker (`GET
+/// /v1/media/namespaces`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MediaNamespace {
+    pub name: String,
+    /// `user` (the key's own account), `org` (an organization where the
+    /// user is an admin or editor), or `shared` (repositories the user was
+    /// added to in someone else's namespace).
+    pub kind: String,
+    /// The organization role, for `org`.
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Whether a new repository name works here (the hub creates it on the
+    /// first generation); `shared` namespaces offer only their repositories.
+    pub can_create: bool,
+    pub repos: Vec<String>,
+}
+
 /// Whether a running turn accepted the interjection. `accepted: false` means
 /// no turn was in flight — send the text as an ordinary prompt instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -68,6 +68,43 @@ button.gallery-inflight:hover {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--separator));
   color: var(--accent);
 }
+/* "Saving to <repo>": its own row under the filters, where the generations
+   on the hub go; the picker opens downward from it. */
+.gallery-dest {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.gallery-dest-label {
+  flex: none;
+}
+.media-dest {
+  min-width: 0;
+}
+.media-dest-btn {
+  max-width: 100%;
+}
+.media-dest-menu {
+  top: calc(100% + var(--space-1));
+  bottom: auto;
+  min-width: 340px;
+  max-height: 440px;
+}
+.media-dest-namespaces {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+.media-dest-kind {
+  margin-left: var(--space-1);
+  opacity: 0.65;
+}
 .gallery-empty {
   padding: var(--space-5) var(--space-4);
   color: var(--text-tertiary);

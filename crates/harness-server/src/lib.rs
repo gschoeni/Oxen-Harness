@@ -181,6 +181,11 @@ pub fn build_router(config: ServerConfig) -> Router {
         .route("/v1/media/{generation}/cancel", post(cancel_media))
         .route("/v1/media/prefs", get(media_prefs).put(set_media_prefs))
         .route("/v1/media/models", get(media_models))
+        .route(
+            "/v1/media/destination",
+            get(media_destination).put(set_media_destination),
+        )
+        .route("/v1/media/namespaces", get(media_namespaces))
         .route("/v1/memory", get(memory_status))
         .route("/v1/memory/quit", post(quit_memory_hog))
         .route("/v1/local-media", get(local_media_status))
@@ -588,6 +593,58 @@ async fn list_media(
         None => state.service.active_root().await,
     };
     Ok(Json(state.service.list_media(&root)))
+}
+
+/// Where the project's generations go on the hub (`?root=`, defaulting to
+/// the active project).
+async fn media_destination(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<MediaQuery>,
+) -> ApiResult<Json<harness_protocol::MediaDestination>> {
+    authorize(&state, &headers, None)?;
+    let root = match query.root {
+        Some(root) => std::path::PathBuf::from(root),
+        None => state.service.active_root().await,
+    };
+    Ok(Json(state.service.media_destination(&root).await))
+}
+
+/// `{"root": "/path", "repo": "ns/name"}`; a null `repo` clears the
+/// project's choice.
+#[derive(Deserialize)]
+struct SetMediaDestination {
+    root: Option<String>,
+    repo: Option<String>,
+}
+
+/// Point the project's generations at a hub repository the key can write
+/// to (checked against the hub first), or clear the choice.
+async fn set_media_destination(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<SetMediaDestination>,
+) -> ApiResult<Json<harness_protocol::MediaDestination>> {
+    authorize(&state, &headers, None)?;
+    let root = match body.root {
+        Some(root) => std::path::PathBuf::from(root),
+        None => state.service.active_root().await,
+    };
+    Ok(Json(
+        state
+            .service
+            .set_media_destination(&root, body.repo.as_deref())
+            .await?,
+    ))
+}
+
+/// The namespaces and repositories the key can send generations to.
+async fn media_namespaces(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Vec<harness_protocol::MediaNamespace>>> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(state.service.media_namespaces().await?))
 }
 
 /// Cancel an in-flight generation by its hub id.

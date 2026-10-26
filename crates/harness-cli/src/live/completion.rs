@@ -704,6 +704,7 @@ mod tests {
         assert!(l.completion_items().iter().any(|c| c.label == "/theme"));
         // Narrowing filters the list.
         l.handle_key(key(KeyCode::Char('m')), 0);
+        l.handle_key(key(KeyCode::Char('o')), 0);
         assert_eq!(
             l.completion_items()
                 .iter()

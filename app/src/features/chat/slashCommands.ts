@@ -22,6 +22,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/auth", aliases: ["/login"], description: "Configure the Oxen API key", usage: "/auth [key]" },
   { name: "/compression", aliases: ["/compress"], description: "Show or switch context compression", usage: "/compression [off|audit|on]" },
   { name: "/usage", description: "Open token usage and estimated spend" },
+  { name: "/media-repo", aliases: ["/hub-repo"], description: "See or switch the hub repo generated media goes to", usage: "/media-repo [namespace/name|clear]" },
   { name: "/help", aliases: ["/?"], description: "Show available slash commands" },
 ];
 

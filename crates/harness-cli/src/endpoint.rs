@@ -280,14 +280,16 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui, base_url: &str
     let media_ctx = harness_media::MediaContext::new(
         crate::preview::SESSION_KEY,
         workspace.root(),
-        // The project's own remote repository (when set) is where its
-        // generations keep copies, over the global hub-repo setting.
         harness_runtime::media::prefs_for(workspace.root()),
         harness_runtime::media::api_for(base_url),
         crate::media::refs(),
         crate::media::library(workspace.root()),
         Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
     )
+    // `/media-repo` switches where the next generation goes.
+    .with_destination(harness_runtime::media::destination_resolver(
+        workspace.root().to_path_buf(),
+    ))
     .with_asides(tools.asides());
     let (media_models, generate_image, generate_video, media_status) =
         harness_media::session_tools(media_ctx);

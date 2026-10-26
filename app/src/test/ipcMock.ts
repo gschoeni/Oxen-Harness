@@ -32,7 +32,9 @@ import type {
   TaskSummary,
   LocalMediaStatus,
   MediaItem,
+  MediaDestination,
   MediaModelSummary,
+  MediaNamespace,
   MemoryStatus,
   MediaPrefs, UsageBreakdown,
   ModelRole,
@@ -464,6 +466,23 @@ export const fsImportFile = vi.fn(
 export const getMediaPrefs = vi.fn(async (): Promise<MediaPrefs> => ({ ...sampleMediaPrefs }));
 export const setMediaPrefs = vi.fn(async (_prefs: MediaPrefs) => {});
 export const listMediaModels = vi.fn(async (_kind?: string, _refresh?: boolean): Promise<MediaModelSummary[]> => []);
+export const sampleMediaDestination: MediaDestination = {
+  repo: "me/playground",
+  source: "hub_default",
+  web_url: "https://hub.oxen.ai/me/playground",
+};
+export const mediaDestination = vi.fn(async (_root: string): Promise<MediaDestination> => ({ ...sampleMediaDestination }));
+export const setMediaDestination = vi.fn(
+  async (_root: string, repo: string | null): Promise<MediaDestination> =>
+    repo
+      ? { repo, source: "project", web_url: `https://hub.oxen.ai/${repo}` }
+      : { ...sampleMediaDestination },
+);
+export const listMediaNamespaces = vi.fn(async (): Promise<MediaNamespace[]> => [
+  { name: "me", kind: "user", role: null, can_create: true, repos: ["playground", "sketches"] },
+  { name: "Studio", kind: "org", role: "editor", can_create: true, repos: ["shots"] },
+  { name: "ox", kind: "shared", role: null, can_create: false, repos: ["playground"] },
+]);
 export const onMediaChanged = listener("mediaChanged");
 
 // ---- local models and memory -------------------------------------------------
@@ -773,6 +792,9 @@ export function resetIpc() {
   pullLocalMedia.mockReset().mockResolvedValue(undefined);
   cancelLocalMediaPull.mockReset().mockResolvedValue(undefined);
   removeLocalMedia.mockReset().mockResolvedValue(0);
+  mediaDestination.mockClear();
+  setMediaDestination.mockClear();
+  listMediaNamespaces.mockClear();
   fsListDir.mockReset().mockResolvedValue([]);
   fsReadFile.mockReset().mockResolvedValue({ content: "", truncated: false, size: 0 });
   fsCreateEntry.mockReset().mockResolvedValue(undefined);

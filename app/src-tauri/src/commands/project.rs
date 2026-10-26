@@ -285,6 +285,7 @@ pub(crate) async fn start_project(
             instructions: existing.instructions,
             context: existing.context,
             remote_repo: existing.remote_repo,
+            media_repo: existing.media_repo,
         };
         project::save(&canonical, &config).map_err(|error| error.to_string())?;
         Ok(())
@@ -325,6 +326,7 @@ pub(crate) async fn update_project(
         context: existing.context,
         // `save` normalizes to `namespace/name` and refuses anything else.
         remote_repo,
+        media_repo: existing.media_repo,
     };
     project::save(&root, &config).map_err(|error| error.to_string())?;
     Ok(project_view(path, 0, false, None))

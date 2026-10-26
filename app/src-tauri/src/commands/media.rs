@@ -46,6 +46,36 @@ pub(crate) async fn list_media_models(
         .await
 }
 
+/// Where the project's generations go on the hub.
+#[tauri::command]
+pub(crate) async fn media_destination(
+    state: State<'_, AppState>,
+    root: String,
+) -> Result<harness_protocol::MediaDestination, String> {
+    Ok(state.media_destination(std::path::Path::new(&root)).await)
+}
+
+/// Send the project's generations to `repo` (`namespace/name`), checked
+/// against the hub first; `None` clears the project's choice.
+#[tauri::command]
+pub(crate) async fn set_media_destination(
+    state: State<'_, AppState>,
+    root: String,
+    repo: Option<String>,
+) -> Result<harness_protocol::MediaDestination, String> {
+    state
+        .set_media_destination(std::path::Path::new(&root), repo.as_deref())
+        .await
+}
+
+/// The namespaces and repositories the key can send generations to.
+#[tauri::command]
+pub(crate) async fn list_media_namespaces(
+    state: State<'_, AppState>,
+) -> Result<Vec<harness_protocol::MediaNamespace>, String> {
+    state.media_namespaces().await
+}
+
 /// System memory, this app's local model servers, and the last memory
 /// notice — the memory meter polls it while a local model is in use.
 // The probes and disk walks below are blocking work: off the main thread

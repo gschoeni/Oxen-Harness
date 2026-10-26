@@ -1071,11 +1071,35 @@ export interface MediaPrefs {
   output_dir: string;
   per_generation_usd: number | null;
   per_run_usd: number | null;
-  /** `namespace/repo` on hub.oxen.ai where the hub also keeps every
-   *  generation (under the output folder); null = files stay in the project. */
+  /** The global default `namespace/repo` on the hub that stores every
+   *  generation (under the output folder); a project can pick its own. Null
+   *  leaves it to the hub: the account's `playground`. */
   hub_repo: string | null;
   /** When the project is an Oxen repo, add and commit each finished batch. */
   commit_with_oxen: boolean;
+}
+
+/** Where a project's generated media goes on the hub. */
+export interface MediaDestination {
+  /** `namespace/name`; for `hub_default`, the account's playground when the
+   *  hub answered, else null. */
+  repo: string | null;
+  /** What decided it: picked for the project, the project's remote repo,
+   *  the global default (Settings → Media), or the hub's own default. */
+  source: "project" | "project_remote" | "global" | "hub_default";
+  web_url: string | null;
+}
+
+/** A namespace generations can go to, for the destination picker. */
+export interface MediaNamespace {
+  name: string;
+  /** `user` = the key's account, `org` = an organization the user may
+   *  create repos in, `shared` = repos the user was added to elsewhere. */
+  kind: "user" | "org" | "shared";
+  role: string | null;
+  /** A new repository name works here (the hub creates it on first use). */
+  can_create: boolean;
+  repos: string[];
 }
 
 /** One image/video model of the hub catalog, for pickers. */

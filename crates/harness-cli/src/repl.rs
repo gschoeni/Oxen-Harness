@@ -73,6 +73,10 @@ pub enum Command {
     /// over them (open one, or stage it as a reference chip); `/gallery
     /// open <n>` / `/gallery use <n>` skip the picker.
     Gallery(Option<String>),
+    /// Where this project's generations go on the hub: `/media-repo` shows
+    /// it and opens a namespace → repository picker; `/media-repo ns/name`
+    /// checks and switches; `/media-repo clear` drops the project's choice.
+    MediaRepo(Option<String>),
     /// Pick up an earlier trail in this workspace: `/resume` opens a picker
     /// over the recent sessions, `/resume <id-prefix>` jumps straight to one.
     Resume(Option<String>),
@@ -312,6 +316,16 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
         ]),
     },
     SlashSpec {
+        name: "/media-repo",
+        aliases: &["/hub-repo"],
+        description: "see or switch the hub repository generated media goes to",
+        build: Command::MediaRepo,
+        completer: ArgCompleter::Static(&[(
+            "clear",
+            "drop this project's choice and use the default",
+        )]),
+    },
+    SlashSpec {
         name: "/preview",
         aliases: &["/browser"],
         description: "open the running app in your browser",
@@ -445,6 +459,21 @@ mod tests {
             parse_command("/lanes read 2"),
             Command::Agents(Some("read 2".into()))
         );
+    }
+
+    #[test]
+    fn media_repo_keeps_its_argument() {
+        assert_eq!(parse_command("/media-repo"), Command::MediaRepo(None));
+        assert_eq!(
+            parse_command("/media-repo ox/art"),
+            Command::MediaRepo(Some("ox/art".into()))
+        );
+        assert_eq!(
+            parse_command("/hub-repo clear"),
+            Command::MediaRepo(Some("clear".into()))
+        );
+        // `/media` stays the gallery.
+        assert_eq!(parse_command("/media"), Command::Gallery(None));
     }
 
     #[test]

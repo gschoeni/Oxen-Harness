@@ -461,3 +461,14 @@ pub fn media_model(model: &harness_media::MediaModel) -> harness_protocol::Media
         inputs: model.inputs.clone(),
     }
 }
+
+/// A destination namespace as its picker row.
+pub fn media_namespace(ns: harness_media::HubNamespace) -> harness_protocol::MediaNamespace {
+    harness_protocol::MediaNamespace {
+        name: ns.name,
+        kind: ns.kind.as_str().to_string(),
+        role: ns.role,
+        can_create: ns.can_create,
+        repos: ns.repos,
+    }
+}

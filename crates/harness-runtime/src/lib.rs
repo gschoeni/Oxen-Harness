@@ -89,5 +89,7 @@ pub enum RuntimeError {
     #[error("{0}")]
     Invalid(String),
     #[error(transparent)]
+    MediaDestination(#[from] harness_media::DestinationError),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
 }

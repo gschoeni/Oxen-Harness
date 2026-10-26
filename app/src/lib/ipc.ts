@@ -39,7 +39,9 @@ import type {
   LocalMediaProgressEvent,
   LocalMediaStatus,
   MediaItem,
+  MediaDestination,
   MediaModelSummary,
+  MediaNamespace,
   MemoryNotice,
   MemoryStatus,
   MediaPrefs,
@@ -707,6 +709,19 @@ export const setMediaPrefs = (prefs: MediaPrefs) => invoke<void>("set_media_pref
  *  catalog is cached for a day; `refresh` refetches it from the hub. */
 export const listMediaModels = (kind?: "image" | "video", refresh = false) =>
   invoke<MediaModelSummary[]>("list_media_models", { kind: kind ?? null, refresh });
+
+/** Where the project's generations go on the hub. */
+export const mediaDestination = (root: string) =>
+  invoke<MediaDestination>("media_destination", { root });
+
+/** Send the project's generations to `repo` (`namespace/name`) — rejected
+ *  with the hub's reason unless the key can write there or create it — or,
+ *  with null, back to the default. Applies to the next generation. */
+export const setMediaDestination = (root: string, repo: string | null) =>
+  invoke<MediaDestination>("set_media_destination", { root, repo });
+
+/** The namespaces and repositories the API key can send generations to. */
+export const listMediaNamespaces = () => invoke<MediaNamespace[]>("list_media_namespaces");
 
 /** System memory, the app's local model servers, and the last memory
  *  notice — what the memory meter shows. */

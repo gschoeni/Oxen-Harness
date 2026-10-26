@@ -18,11 +18,12 @@ mod event;
 
 pub use dto::{
     AgentSummary, ApprovalAnswer, Choice, InterjectRequest, InterjectResponse, LocalMediaModel,
-    LocalMediaStatus, LocalModelProcess, MediaItem, MediaModelSummary, MediaProgress, MediaSource,
-    MediaUpload, MemoryHog, MemoryNotice, MemoryStatus, MemorySystem, Question, QuestionAnswer,
-    RenameRequest, ReviewResult, SessionInfo, SessionView, StudyAnswerRequest, StudyAnswerResult,
-    StudyBatch, StudyBatchRequest, StudyFlagRequest, StudyGrade, StudyProfile, StudyQuestion,
-    StudyTerritory, TaskSummary, ThreadEntry, ThreadSnapshot, TurnRequest, TurnResponse,
+    LocalMediaStatus, LocalModelProcess, MediaDestination, MediaItem, MediaModelSummary,
+    MediaNamespace, MediaProgress, MediaSource, MediaUpload, MemoryHog, MemoryNotice, MemoryStatus,
+    MemorySystem, Question, QuestionAnswer, RenameRequest, ReviewResult, SessionInfo, SessionView,
+    StudyAnswerRequest, StudyAnswerResult, StudyBatch, StudyBatchRequest, StudyFlagRequest,
+    StudyGrade, StudyProfile, StudyQuestion, StudyTerritory, TaskSummary, ThreadEntry,
+    ThreadSnapshot, TurnRequest, TurnResponse,
 };
 pub use event::{
     ApprovalKind, ApprovalPhase, FleetActivityKind, FleetAgentPhase, FleetSource, LocalPhase,

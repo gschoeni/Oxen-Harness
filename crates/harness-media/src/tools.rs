@@ -38,6 +38,10 @@ use crate::{
 pub const MAX_COUNT: u32 = 4;
 
 /// Everything the four tools share for one session.
+/// Where generations go right now, as `(namespace, repo)`; see
+/// [`MediaContext::with_destination`].
+pub type HubTarget = Arc<dyn Fn() -> Option<(String, String)> + Send + Sync>;
+
 pub struct MediaContext {
     pub session: String,
     pub root: PathBuf,
@@ -54,6 +58,9 @@ pub struct MediaContext {
     /// On-device models; `None` when the host installed no provider.
     pub local: Option<Arc<dyn LocalMedia>>,
     batch_prefix: Option<String>,
+    /// Re-reads the hub destination at each enqueue, so switching it applies
+    /// to a chat that is already open; without it, `prefs.hub_repo` decides.
+    destination: Option<HubTarget>,
     hub_catalog: tokio::sync::OnceCell<Arc<Catalog>>,
     feed: std::sync::OnceLock<Arc<crate::events::CompletionFeed>>,
     uploader: std::sync::OnceLock<Arc<crate::upload::HubUploader>>,
@@ -81,10 +88,26 @@ impl MediaContext {
             asides: None,
             local: crate::local::installed(),
             batch_prefix: None,
+            destination: None,
             hub_catalog: tokio::sync::OnceCell::new(),
             feed: std::sync::OnceLock::new(),
             uploader: std::sync::OnceLock::new(),
             http: harness_http::client(),
+        }
+    }
+
+    /// Resolve the hub destination fresh for every generation.
+    pub fn with_destination(mut self, resolve: HubTarget) -> Self {
+        self.destination = Some(resolve);
+        self
+    }
+
+    /// The `(namespace, repo)` generations and their references go to now;
+    /// `None` leaves it to the hub (the account's `playground`).
+    pub fn hub_target(&self) -> Option<(String, String)> {
+        match &self.destination {
+            Some(resolve) => resolve(),
+            None => self.prefs.hub_target(),
         }
     }
 
@@ -213,7 +236,7 @@ impl MediaContext {
                         self.http.clone(),
                         api_root.clone(),
                         api.api_key.clone(),
-                        self.prefs.hub_target(),
+                        None,
                         crate::upload::upload_cache_path(&api_root),
                     ))
                 })
@@ -757,7 +780,7 @@ async fn run_generation(
     // Enqueue.
     body.insert("model".into(), Value::String(prepared.model.id.clone()));
     body.insert("num_generations".into(), Value::from(count));
-    if let Some((ns, repo)) = ctx.prefs.hub_target() {
+    if let Some((ns, repo)) = ctx.hub_target() {
         body.insert("target_namespace".into(), Value::String(ns));
         body.insert("target_repo".into(), Value::String(repo));
         body.insert(
@@ -1455,7 +1478,10 @@ async fn upload_refs(
                 });
             }
         });
-        match uploader.upload(&r.path, r.kind, on_progress).await {
+        match uploader
+            .upload_into(ctx.hub_target(), &r.path, r.kind, on_progress)
+            .await
+        {
             Ok(uploaded) => {
                 ctx.library.set_upload(crate::library::MediaUpload {
                     bytes_sent: uploaded.bytes,
@@ -2885,6 +2911,77 @@ mod tests {
             .unwrap();
         assert!(out.starts_with("Generated 1 image"), "{out}");
         target.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_switched_destination_applies_to_the_next_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut server = mockito::Server::new_async().await;
+        let mut enqueues = Vec::new();
+        for (id, ns, repo) in [("g1", "ox", "art"), ("g2", "studio", "shots")] {
+            let result_url = format!("{}/result/{id}.png", server.url());
+            enqueues.push(
+                server
+                    .mock("POST", "/api/ai/queue")
+                    .match_body(mockito::Matcher::PartialJson(
+                        json!({"target_namespace": ns, "target_repo": repo}),
+                    ))
+                    .with_body(
+                        json!({"generations": [{"generation_id": id, "status": "queued"}]})
+                            .to_string(),
+                    )
+                    .expect(1)
+                    .create_async()
+                    .await,
+            );
+            server
+                .mock("GET", format!("/api/ai/queue/{id}").as_str())
+                .with_body(
+                    json!({"generation_id": id, "status": "succeeded", "media_type": "image",
+                           "result_url": result_url})
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+            server
+                .mock("GET", format!("/result/{id}.png").as_str())
+                .with_body(png())
+                .create_async()
+                .await;
+        }
+        let picked = Arc::new(Mutex::new(Some(("ox".to_string(), "art".to_string()))));
+        let resolve = picked.clone();
+        let ctx = Arc::new(
+            MediaContext::new(
+                "s1",
+                dir.path(),
+                // The chat started with a different repo; the resolver wins.
+                MediaPrefs {
+                    hub_repo: Some("old/place".into()),
+                    ..MediaPrefs::default()
+                },
+                Some(MediaApi {
+                    base_url: format!("{}/api/ai", server.url()),
+                    api_key: "k".into(),
+                }),
+                Arc::new(MediaRefs::new()),
+                Arc::new(MediaLibrary::new(dir.path(), "generations")),
+                Arc::new(NoConfirmSink),
+            )
+            .with_catalog(catalog())
+            .with_destination(Arc::new(move || resolve.lock().unwrap().clone())),
+        );
+        let tool = GenerateImageTool { ctx };
+        tool.invoke(json!({"prompt": "an ox", "model": "flux-mini"}))
+            .await
+            .unwrap();
+        *picked.lock().unwrap() = Some(("studio".into(), "shots".into()));
+        tool.invoke(json!({"prompt": "an ox", "model": "flux-mini"}))
+            .await
+            .unwrap();
+        for enqueue in enqueues {
+            enqueue.assert_async().await;
+        }
     }
 
     #[tokio::test]

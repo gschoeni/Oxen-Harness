@@ -199,16 +199,16 @@ impl HubUploader {
                 status,
                 message: format!(
                     "could not find or create `{namespace}/{repo}` for this API key \
-                     ({status}: {message}). Set Settings → Media → Hub repo to a repository \
-                     this key can write to (for example `ox/playground`)."
+                     ({status}: {message}). Pick a repository this key can write to with \
+                     `/media-repo` or the gallery's \"Saving to\" picker."
                 ),
             }),
             Err(UploadError::Unauthorized) => Err(UploadError::Api {
                 status: 401,
                 message: format!(
                     "this API key isn't allowed to create repositories, and no `{repo}` \
-                     repository was found for it. Set Settings → Media → Hub repo to a \
-                     repository this key can write to (for example `ox/playground`)."
+                     repository was found for it. Pick a repository this key can \
+                     write to with `/media-repo` or the gallery's \"Saving to\" picker."
                 ),
             }),
             Err(e) => Err(e),
@@ -223,12 +223,28 @@ impl HubUploader {
         kind: RefKind,
         on_progress: Arc<dyn Fn(u64, u64) + Send + Sync>,
     ) -> Result<UploadedRef, UploadError> {
+        self.upload_into(None, path, kind, on_progress).await
+    }
+
+    /// [`HubUploader::upload`] into `target` (`namespace`, `repo`) when
+    /// given — the destination the user picked for this generation — else
+    /// into [`HubUploader::target`].
+    pub async fn upload_into(
+        &self,
+        target: Option<(String, String)>,
+        path: &Path,
+        kind: RefKind,
+        on_progress: Arc<dyn Fn(u64, u64) + Send + Sync>,
+    ) -> Result<UploadedRef, UploadError> {
         let bytes = tokio::fs::read(path)
             .await
             .map_err(|e| UploadError::Io(format!("{}: {e}", path.display())))?;
         let total = bytes.len() as u64;
         let hash = hex(&sha2::Sha256::digest(&bytes));
-        let (namespace, repo) = self.target().await?;
+        let (namespace, repo) = match target {
+            Some(target) => target,
+            None => self.target().await?,
+        };
 
         if let Some(cached) = self.cached(&hash, &namespace, &repo) {
             on_progress(total, total);
@@ -624,10 +640,7 @@ mod tests {
             None,
         );
         let err = uploader.target().await.unwrap_err();
-        assert!(
-            err.to_string().contains("Settings → Media → Hub repo"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("/media-repo"), "{err}");
     }
 
     #[tokio::test]

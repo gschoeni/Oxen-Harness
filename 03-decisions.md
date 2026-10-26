@@ -1697,3 +1697,29 @@ them. Checked against all 63 skills in `anthropics/skills` and
 move into place in one step. They refuse to overwrite an existing skill,
 skip `..`/absolute paths and symlinks, and are capped at 50 MB and 2,000
 files.
+
+## Each project picks where its generations go on the hub (2026-10-25)
+
+**Decision:** the hub repository a generation is written to (the queue's
+`target_namespace`/`target_repo`) is chosen per project and switched in
+place: `project.json` `media_repo`, set from the Gallery's "Saving to" picker
+or `/media-repo` in either front end. Resolution, most specific first:
+project `media_repo` → project `remote_repo` → global `media.json`
+`hub_repo` → the hub's own default (`<username>/playground`). The picker
+names which one decided.
+
+**Live, not per chat:** media contexts carry a `HubTarget` resolver that
+re-reads the project on every enqueue and reference upload, so a switch
+reaches chats that are already open. Budgets and default models still apply
+from the next chat.
+
+**What's on offer mirrors the hub's rules** (`MediaGeneration.authorize_destination`):
+any name, existing or new (the hub creates it), in the key's own namespace
+or an organization where the user is `admin`/`editor`
+(`GET /users/{u}/orgs` `access_level`); otherwise only existing repositories
+the user was added to (`GET /user/repos`), and only with repo `access_level`
+`admin`/`editor` (`GET /repos/{ns}/{name}`). The hub has no "my namespaces"
+call (`/api/namespaces` 404s on hub.oxen.ai), so the list is built from
+those three. A choice is checked against the hub before it is saved, and the
+refusal (read-only, or a new name outside a creatable namespace) is the
+error the user sees.

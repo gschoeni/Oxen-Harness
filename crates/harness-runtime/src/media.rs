@@ -20,15 +20,125 @@ pub fn load() -> MediaPrefs {
 }
 
 /// The preferences a session under `root` runs with: the saved global ones,
-/// with the project's own remote repository (when it has one) standing in
-/// for the global "hub repo" — a project that knows where it lives keeps
-/// its generations there, not in a shared playground.
+/// with the hub repository resolved for the project ([`destination_for`]).
 pub fn prefs_for(root: &std::path::Path) -> MediaPrefs {
     let mut prefs = load();
-    if let Some(repo) = crate::project::load(root).remote_repo {
-        prefs.hub_repo = Some(repo);
-    }
+    prefs.hub_repo = destination_for(root).repo;
     prefs
+}
+
+/// Which setting decided where a project's generations go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DestinationSource {
+    /// The project's own media repository (`project.json` `media_repo`).
+    Project,
+    /// The project's remote repository.
+    ProjectRemote,
+    /// The global default (Settings → Media → Hub repo).
+    Global,
+    /// Nothing set: the hub's default, the account's `playground`.
+    HubDefault,
+}
+
+impl DestinationSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::ProjectRemote => "project_remote",
+            Self::Global => "global",
+            Self::HubDefault => "hub_default",
+        }
+    }
+}
+
+/// Where generations made under a project go on the hub.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Destination {
+    /// `namespace/name`; `None` for the hub's default.
+    pub repo: Option<String>,
+    pub source: DestinationSource,
+}
+
+/// Resolve a project's media destination, most specific first: the
+/// project's media repository, its remote repository (a project that knows
+/// where it lives keeps its generations there), the global default, else
+/// the hub's own default.
+pub fn destination_for(root: &std::path::Path) -> Destination {
+    let project = crate::project::load(root);
+    let well_formed =
+        |repo: Option<String>| repo.filter(|r| harness_media::parse_destination(r).is_some());
+    let candidates = [
+        (well_formed(project.media_repo), DestinationSource::Project),
+        (
+            well_formed(project.remote_repo),
+            DestinationSource::ProjectRemote,
+        ),
+        (well_formed(load().hub_repo), DestinationSource::Global),
+    ];
+    candidates
+        .into_iter()
+        .find_map(|(repo, source)| {
+            repo.map(|repo| Destination {
+                repo: Some(repo),
+                source,
+            })
+        })
+        .unwrap_or(Destination {
+            repo: None,
+            source: DestinationSource::HubDefault,
+        })
+}
+
+/// Send the project's generations to `repo` (`namespace/name`) once the
+/// hub confirms the key can write there or will create it, saved in the
+/// hub's casing; `None` (or blank) clears the project's choice. The one
+/// write path `/media-repo` and the desktop picker share.
+pub async fn choose_destination(
+    root: &std::path::Path,
+    repo: Option<&str>,
+    api: Option<&harness_media::MediaApi>,
+) -> Result<Destination, RuntimeError> {
+    let checked = match repo.map(str::trim).filter(|r| !r.is_empty()) {
+        Some(raw) => {
+            let api = api.ok_or_else(|| {
+                RuntimeError::Invalid(
+                    "set an Oxen API key (Settings → Connection) to choose a hub repository".into(),
+                )
+            })?;
+            let check = harness_media::HubRepos::connect(&api.base_url, api.api_key.clone())
+                .check_destination(raw)
+                .await?;
+            Some(format!("{}/{}", check.namespace, check.repo))
+        }
+        None => None,
+    };
+    crate::project::set_media_repo(root, checked.as_deref())?;
+    Ok(destination_for(root))
+}
+
+/// The repository the hub falls back to when nothing is set: the key's
+/// own `playground`.
+pub async fn hub_default_repo(
+    api: &harness_media::MediaApi,
+) -> Result<String, harness_media::UploadError> {
+    let user = harness_media::HubRepos::connect(&api.base_url, api.api_key.clone())
+        .whoami()
+        .await?;
+    Ok(format!(
+        "{user}/{}",
+        harness_media::upload::DEFAULT_UPLOAD_REPO
+    ))
+}
+
+/// A [`harness_media::HubTarget`] that re-reads the project's destination
+/// for each generation, so switching it reaches chats already open.
+pub fn destination_resolver(root: std::path::PathBuf) -> harness_media::HubTarget {
+    std::sync::Arc::new(move || {
+        destination_for(&root)
+            .repo
+            .as_deref()
+            .and_then(harness_media::parse_destination)
+    })
 }
 
 /// Atomically persist the preferences and snapshot the config repo.
@@ -140,6 +250,54 @@ mod tests {
                 prefs_for(tmp.path()).hub_target(),
                 Some(("ox".into(), "my-app".into()))
             );
+        });
+    }
+
+    #[test]
+    fn the_projects_media_repo_wins_then_its_remote_then_the_global_default() {
+        with_temp_home(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            assert_eq!(
+                destination_for(root),
+                Destination {
+                    repo: None,
+                    source: DestinationSource::HubDefault
+                }
+            );
+
+            let mut prefs = load();
+            prefs.hub_repo = Some("ox/playground".into());
+            save(&prefs).unwrap();
+            assert_eq!(destination_for(root).source, DestinationSource::Global);
+
+            crate::project::set_remote_repo(root, Some("ox/my-app")).unwrap();
+            assert_eq!(
+                destination_for(root),
+                Destination {
+                    repo: Some("ox/my-app".into()),
+                    source: DestinationSource::ProjectRemote
+                }
+            );
+
+            let resolve = destination_resolver(root.to_path_buf());
+            crate::project::set_media_repo(root, Some(" studio/shots/ ")).unwrap();
+            assert_eq!(
+                destination_for(root),
+                Destination {
+                    repo: Some("studio/shots".into()),
+                    source: DestinationSource::Project
+                }
+            );
+            // A resolver made earlier sees the switch.
+            assert_eq!(resolve(), Some(("studio".into(), "shots".into())));
+
+            crate::project::set_media_repo(root, None).unwrap();
+            assert_eq!(
+                destination_for(root).source,
+                DestinationSource::ProjectRemote
+            );
+            assert!(crate::project::set_media_repo(root, Some("no-slash")).is_err());
         });
     }
 

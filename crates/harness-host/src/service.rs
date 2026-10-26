@@ -1375,6 +1375,73 @@ impl SessionService {
             .collect())
     }
 
+    /// Where generations made under `root` go on the hub. When nothing is
+    /// set, the hub's default is named by asking who the key belongs to;
+    /// offline (or without a key) it stays unnamed.
+    pub async fn media_destination(&self, root: &Path) -> harness_protocol::MediaDestination {
+        let resolved = harness_runtime::media::destination_for(root);
+        let api = harness_runtime::media::api();
+        let repo = match resolved.repo {
+            Some(repo) => Some(repo),
+            None => match &api {
+                Some(api) => match harness_runtime::media::hub_default_repo(api).await {
+                    Ok(repo) => Some(repo),
+                    Err(e) => {
+                        tracing::info!("naming the hub's default media repository: {e}");
+                        None
+                    }
+                },
+                None => None,
+            },
+        };
+        let base = api
+            .as_ref()
+            .map(|a| a.base_url.clone())
+            .unwrap_or_else(|| harness_core::DEFAULT_BASE_URL.to_string());
+        let web_url = repo
+            .as_deref()
+            .and_then(harness_media::parse_destination)
+            .map(|(ns, name)| harness_media::repo_web_url(&base, &ns, &name));
+        harness_protocol::MediaDestination {
+            repo,
+            source: resolved.source.as_str().to_string(),
+            web_url,
+        }
+    }
+
+    /// The namespaces (and their repositories) the key can send
+    /// generations to, for the destination picker.
+    pub async fn media_namespaces(&self) -> Result<Vec<harness_protocol::MediaNamespace>, String> {
+        let api = harness_runtime::media::api().ok_or_else(|| {
+            "set an Oxen API key (Settings → Connection) to list repositories".to_string()
+        })?;
+        let hub = harness_media::HubRepos::connect(&api.base_url, api.api_key);
+        let namespaces = hub
+            .destinations()
+            .await
+            .map_err(|e| format!("listing hub repositories: {e}"))?;
+        Ok(namespaces
+            .into_iter()
+            .map(translate::media_namespace)
+            .collect())
+    }
+
+    /// Send the project's generations to `repo` (`namespace/name`) after
+    /// the hub confirms the key can write there (or create it), or with
+    /// `None` go back to the project remote / global default. Applies to the
+    /// next generation, in chats already open too.
+    pub async fn set_media_destination(
+        &self,
+        root: &Path,
+        repo: Option<&str>,
+    ) -> Result<harness_protocol::MediaDestination, String> {
+        let api = harness_runtime::media::api();
+        harness_runtime::media::choose_destination(root, repo, api.as_ref())
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(self.media_destination(root).await)
+    }
+
     /// Complete a session's tool registry and derive its run config: the
     /// session-scoped canvas/viewer/preview tools, the user's saved tool
     /// preferences applied to the complete set, the `skill` tool when enabled
@@ -1477,14 +1544,17 @@ impl SessionService {
         let media_ctx = harness_media::MediaContext::new(
             session,
             workspace_root,
-            // The project's own remote repository (when set) is where its
-            // generations keep copies, over the global hub-repo setting.
             harness_runtime::media::prefs_for(workspace_root),
             harness_runtime::media::api(),
             self.refs_for(session),
             self.media_library_for(workspace_root),
             Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
         )
+        // Switching the project's destination reaches this chat's next
+        // generation.
+        .with_destination(harness_runtime::media::destination_resolver(
+            workspace_root.to_path_buf(),
+        ))
         .with_asides(tools.asides());
         let workbench = Arc::new(crate::workbench::Workbench {
             features: self.features,
@@ -1495,15 +1565,20 @@ impl SessionService {
             gate: gate.clone(),
             client: (self.client_factory)(harness_core::DEFAULT_MODEL),
             store: self.store()?,
-            media: Arc::new(harness_media::MediaContext::new(
-                session,
-                workspace_root,
-                harness_runtime::media::prefs_for(workspace_root),
-                harness_runtime::media::api(),
-                self.refs_for(session),
-                self.media_library_for(workspace_root),
-                Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
-            )),
+            media: Arc::new(
+                harness_media::MediaContext::new(
+                    session,
+                    workspace_root,
+                    harness_runtime::media::prefs_for(workspace_root),
+                    harness_runtime::media::api(),
+                    self.refs_for(session),
+                    self.media_library_for(workspace_root),
+                    Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
+                )
+                .with_destination(harness_runtime::media::destination_resolver(
+                    workspace_root.to_path_buf(),
+                )),
+            ),
             lifecycle: previous_workbench
                 .as_ref()
                 .map(|engine| engine.lifecycle.clone())

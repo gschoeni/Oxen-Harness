@@ -489,6 +489,9 @@ impl Executor for Workbench {
                         self.media.library.clone(),
                         self.media.sink.clone(),
                     )
+                    .with_destination(harness_runtime::media::destination_resolver(
+                        self.docs.root().to_path_buf(),
+                    ))
                     .with_batch_prefix(format!("wf-{run}-{}", node.id)),
                 );
                 let params = workflow_run::parameters(node)

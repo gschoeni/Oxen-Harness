@@ -63,6 +63,18 @@ impl HubRepos {
         Self::new(http, crate::queue::api_root_from_base(base_url), api_key)
     }
 
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    pub(crate) fn api_root(&self) -> &str {
+        &self.api_root
+    }
+
+    pub(crate) fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
     /// The username this API key belongs to.
     pub async fn whoami(&self) -> Result<String, HubError> {
         let res = send(

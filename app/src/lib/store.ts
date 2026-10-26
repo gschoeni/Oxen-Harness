@@ -59,6 +59,8 @@ import {
   totalTokensUsed,
   useLocalModel,
   listMedia,
+  mediaDestination as fetchMediaDestination,
+  setMediaDestination,
   cancelMedia as cancelMediaIpc,
   getMediaPrefs,
   listSkills,
@@ -148,6 +150,7 @@ import type {
   TasksChangedEvent,
   TaskSummary,
   MediaChangedEvent,
+  MediaDestination,
   MediaItem,
   MediaUpload,
   MediaPrefs,
@@ -589,6 +592,11 @@ interface AppState {
   /** Set when the Gallery should open on what is still rendering (the
    *  header's "N rendering" pill); cleared with `mediaFocus`. */
   galleryRenderingFocus: boolean;
+  /** Where each project's generations go on the hub, keyed by root. */
+  mediaDestinations: Record<string, MediaDestination | undefined>;
+  /** Set when the Gallery should open its destination picker
+   *  (`/media-repo`); the picker clears it once open. */
+  mediaDestinationPick: boolean;
   /** Files another surface (the Gallery's "Use as reference") staged for the
    *  composer; Chat drains them into its attachment list. Absolute paths. */
   pendingAttachments: string[];
@@ -834,6 +842,15 @@ interface AppState {
   openRendering: () => void;
   /** Consume the Gallery's focus request. */
   clearMediaFocus: () => void;
+  /** Re-read where a project's generations go. */
+  refreshMediaDestination: (root: string) => Promise<void>;
+  /** Send a project's generations to `repo` (`namespace/name`), or with
+   *  null back to the default. Rejects with the hub's reason. */
+  chooseMediaDestination: (root: string, repo: string | null) => Promise<MediaDestination>;
+  /** Open the Gallery with its destination picker showing. */
+  openMediaDestinationPicker: () => void;
+  /** The destination picker took the open request. */
+  clearMediaDestinationPick: () => void;
   /** Stage a file for the composer's next message (absolute path). */
   stageAttachment: (path: string) => void;
   /** The composer took the staged files. */
@@ -1411,6 +1428,8 @@ export const useStore = create<AppState>((rawSet, get) => {
     },
     mediaFocus: null,
     galleryRenderingFocus: false,
+    mediaDestinations: {},
+    mediaDestinationPick: false,
     pendingAttachments: [],
     inspectorLive: false,
     agentView: {},
@@ -2226,6 +2245,28 @@ export const useStore = create<AppState>((rawSet, get) => {
     },
 
     clearMediaFocus: () => set({ mediaFocus: null, galleryRenderingFocus: false }),
+
+    refreshMediaDestination: async (root) => {
+      try {
+        const destination = await fetchMediaDestination(root);
+        set((s) => ({ mediaDestinations: { ...s.mediaDestinations, [root]: destination } }));
+      } catch {
+        // Unknown until the next look; the picker still offers a choice.
+      }
+    },
+
+    chooseMediaDestination: async (root, repo) => {
+      const destination = await setMediaDestination(root, repo);
+      set((s) => ({ mediaDestinations: { ...s.mediaDestinations, [root]: destination } }));
+      return destination;
+    },
+
+    openMediaDestinationPicker: () => {
+      get().openGallery();
+      set({ mediaDestinationPick: true });
+    },
+
+    clearMediaDestinationPick: () => set({ mediaDestinationPick: false }),
 
     revealInFiles: (path) => {
       get().setLeftTab("files");

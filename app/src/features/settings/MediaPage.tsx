@@ -299,7 +299,7 @@ function HubRepoField({ value, onChange }: { value: string | null; onChange: (v:
   return (
     <div className="media-hub-repo">
       <label className="media-field" htmlFor="media-hub-repo">
-        <span className="media-field-label">Hub repo</span>
+        <span className="media-field-label">Default hub repo</span>
         <input
           id="media-hub-repo"
           className="field-input"
@@ -314,8 +314,9 @@ function HubRepoField({ value, onChange }: { value: string | null; onChange: (v:
         />
       </label>
       <p className="hint">
-        Also store each generation in this Oxen repo on hub.oxen.ai, under the output folder. Leave
-        empty to keep files only in the project.
+        The default Oxen repo on the hub that stores each generation, under the output folder. Leave
+        empty for your account's playground. A project can pick its own from the Gallery or with
+        /media-repo.
       </p>
     </div>
   );

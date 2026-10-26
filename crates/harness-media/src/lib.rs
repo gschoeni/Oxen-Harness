@@ -36,6 +36,7 @@
 
 pub mod budget;
 pub mod catalog;
+pub mod destination;
 pub mod events;
 pub mod hub;
 pub mod library;
@@ -53,6 +54,9 @@ use serde::{Deserialize, Serialize};
 
 pub use budget::{BudgetVerdict, MediaBudget, SpendEstimate};
 pub use catalog::{Catalog, MediaModel};
+pub use destination::{
+    parse_destination, DestinationCheck, DestinationError, HubNamespace, NamespaceKind,
+};
 pub use events::{Completion, CompletionFeed};
 pub use hub::{repo_web_url, HubRepos, NewRepo};
 pub use library::{
@@ -63,7 +67,7 @@ pub use local::{LocalInfo, LocalJob, LocalMedia, LocalMediaError, LocalOutput, L
 pub use queue::{GenerationRecord, QueueClient, QueueError};
 pub use refs::{MediaRefs, RefKind, ResolvedRef};
 pub use tools::{
-    GenerateImageTool, GenerateVideoTool, MediaContext, MediaModelsTool, MediaStatusTool,
+    GenerateImageTool, GenerateVideoTool, HubTarget, MediaContext, MediaModelsTool, MediaStatusTool,
 };
 pub use upload::{HubUploader, UploadError, UploadedRef};
 
