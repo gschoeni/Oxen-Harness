@@ -82,8 +82,12 @@ button.gallery-inflight:hover {
 .gallery-dest-label {
   flex: none;
 }
-.media-dest {
+/* The popover anchors to the whole "Saving to" row, not the button, so it
+   spans the dock's width instead of spilling past its right edge. */
+.gallery-dest {
   position: relative;
+}
+.media-dest {
   min-width: 0;
 }
 .media-dest-btn {
@@ -95,7 +99,7 @@ button.gallery-inflight:hover {
   top: calc(100% + var(--space-1));
   left: 0;
   z-index: var(--z-dropdown);
-  width: min(420px, calc(100vw - var(--space-6)));
+  width: min(420px, 100%);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -118,6 +122,10 @@ button.gallery-inflight:hover {
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+}
+/* Settings' two columns fold to one in a narrow window. */
+.repo-browser-columns {
+  container-type: inline-size;
 }
 .repo-browser-search {
   display: flex;
@@ -228,7 +236,14 @@ button.gallery-inflight:hover {
   border: 1px solid var(--separator);
   border-radius: var(--radius-sm);
 }
+.repo-browser-results {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
 .repo-browser-list {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -237,6 +252,22 @@ button.gallery-inflight:hover {
 }
 .repo-browser-compact .repo-browser-list {
   max-height: 300px;
+}
+@container (max-width: 520px) {
+  .repo-browser-columns .repo-browser-body {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+  .repo-browser-columns .repo-browser-namespaces {
+    max-height: 160px;
+    padding-right: 0;
+    padding-bottom: var(--space-2);
+    border-right: none;
+    border-bottom: 1px solid var(--separator);
+  }
+  .repo-browser-columns .repo-browser-list {
+    max-height: 300px;
+  }
 }
 .repo-browser-caption {
   padding: 0 var(--space-2) var(--space-1);
@@ -261,18 +292,22 @@ button.gallery-inflight:hover {
 .repo-browser-row.cursor {
   background: var(--surface-2);
 }
-.repo-browser-row.current .repo-browser-row-name {
+.repo-browser-row.current .repo-browser-row-text {
   color: var(--accent);
 }
-.repo-browser-row-name {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
+/* Plain inline text so a long name ends in an ellipsis (it can't inside a
+   flex container). */
+.repo-browser-row-text {
+  flex: 1;
   min-width: 0;
   font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.repo-browser-row-icon {
+  flex: none;
+  color: var(--text-tertiary);
 }
 .repo-browser-row-ns {
   color: var(--text-tertiary);

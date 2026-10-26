@@ -596,6 +596,9 @@ interface AppState {
   galleryRenderingFocus: boolean;
   /** Where each project's generations go on the hub, keyed by root. */
   mediaDestinations: Record<string, MediaDestination | undefined>;
+  /** Why the last lookup of a root's destination failed (offline, no key);
+   *  cleared by the next success. */
+  mediaDestinationErrors: Record<string, string | undefined>;
   /** What the API key can send assets to; null until first listed. */
   mediaNamespaces: MediaNamespace[] | null;
   /** Files another surface (the Gallery's "Use as reference") staged for the
@@ -846,8 +849,12 @@ interface AppState {
   /** List the namespaces and repositories the key can write to, once per
    *  app run unless `force`d. Rejects with the hub's reason. */
   loadMediaNamespaces: (force?: boolean) => Promise<MediaNamespace[]>;
-  /** Re-read where a project's generations go. */
+  /** Re-read where a project's generations go; a failure lands in
+   *  `mediaDestinationErrors`. */
   refreshMediaDestination: (root: string) => Promise<void>;
+  /** The key or host changed: forget what the old one could reach (the
+   *  namespace list, every destination) so nothing shows the old account. */
+  resetHubIdentity: () => void;
   /** Send a project's generations to `repo` (`namespace/name`), or with
    *  null back to the default. Rejects with the hub's reason. */
   chooseMediaDestination: (root: string, repo: string | null) => Promise<MediaDestination>;
@@ -1004,6 +1011,22 @@ interface AppState {
   ingestApprovalResolved: (e: ApprovalEvent) => void;
   /** Drop a session's pending approval card (after answering). */
   clearApproval: (session: string) => void;
+}
+
+// Hub-identity bookkeeping for the repository picker, outside the store
+// state because nothing renders from it: `hubGeneration` changes with the
+// key (a reply under the old one is dropped), and each root's latest
+// destination request holds the only ticket whose answer is kept.
+let hubGeneration = 0;
+let namespacesInFlight: { generation: number; promise: Promise<MediaNamespace[]> } | null = null;
+const destinationTickets = new Map<string, number>();
+function nextDestinationTicket(root: string): number {
+  const ticket = (destinationTickets.get(root) ?? 0) + 1;
+  destinationTickets.set(root, ticket);
+  return ticket;
+}
+function isLatestDestination(root: string, ticket: number): boolean {
+  return destinationTickets.get(root) === ticket;
 }
 
 export const useStore = create<AppState>((rawSet, get) => {
@@ -1429,6 +1452,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     mediaFocus: null,
     galleryRenderingFocus: false,
     mediaDestinations: {},
+    mediaDestinationErrors: {},
     mediaNamespaces: null,
     pendingAttachments: [],
     inspectorLive: false,
@@ -2249,24 +2273,55 @@ export const useStore = create<AppState>((rawSet, get) => {
     loadMediaNamespaces: async (force = false) => {
       const cached = get().mediaNamespaces;
       if (cached && !force) return cached;
-      const namespaces = await listMediaNamespaces();
-      set({ mediaNamespaces: namespaces });
-      return namespaces;
+      // Callers opening at once share one listing; one started under an
+      // earlier key is never cached under the new one.
+      if (namespacesInFlight && namespacesInFlight.generation === hubGeneration && !force)
+        return namespacesInFlight.promise;
+      const generation = hubGeneration;
+      const promise = listMediaNamespaces().then((namespaces) => {
+        if (generation === hubGeneration) set({ mediaNamespaces: namespaces });
+        return namespaces;
+      });
+      namespacesInFlight = { generation, promise };
+      try {
+        return await promise;
+      } finally {
+        if (namespacesInFlight?.promise === promise) namespacesInFlight = null;
+      }
     },
 
     refreshMediaDestination: async (root) => {
+      const ticket = nextDestinationTicket(root);
       try {
         const destination = await fetchMediaDestination(root);
-        set((s) => ({ mediaDestinations: { ...s.mediaDestinations, [root]: destination } }));
-      } catch {
-        // Unknown until the next look; the picker still offers a choice.
+        if (!isLatestDestination(root, ticket)) return;
+        set((s) => ({
+          mediaDestinations: { ...s.mediaDestinations, [root]: destination },
+          mediaDestinationErrors: { ...s.mediaDestinationErrors, [root]: undefined },
+        }));
+      } catch (error) {
+        if (!isLatestDestination(root, ticket)) return;
+        set((s) => ({ mediaDestinationErrors: { ...s.mediaDestinationErrors, [root]: String(error) } }));
       }
     },
 
     chooseMediaDestination: async (root, repo) => {
+      // A lookup still in flight would answer with the old destination.
+      const ticket = nextDestinationTicket(root);
       const destination = await setMediaDestination(root, repo);
-      set((s) => ({ mediaDestinations: { ...s.mediaDestinations, [root]: destination } }));
+      if (isLatestDestination(root, ticket))
+        set((s) => ({
+          mediaDestinations: { ...s.mediaDestinations, [root]: destination },
+          mediaDestinationErrors: { ...s.mediaDestinationErrors, [root]: undefined },
+        }));
       return destination;
+    },
+
+    resetHubIdentity: () => {
+      hubGeneration += 1;
+      namespacesInFlight = null;
+      destinationTickets.clear();
+      set({ mediaNamespaces: null, mediaDestinations: {}, mediaDestinationErrors: {} });
     },
 
     revealInFiles: (path) => {

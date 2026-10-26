@@ -2,16 +2,20 @@
 // can write to: its own namespace, organizations it may create repos in, and
 // repositories shared with it. Search spans every namespace at once; with no
 // query, one namespace's repositories are listed. A typed `namespace/name`,
-// or a new name where the hub will create it, is offered as its own row. The
-// backend checks the pick against the hub before saving and its refusal
-// (read-only, not a namespace you can create in) is shown in place.
+// or a new name in the selected namespace (which stays visible while
+// searching, so it's clear where a new repository would go), is offered as
+// its own row. The backend checks the pick against the hub before saving and
+// its refusal (read-only, not a namespace you can create in) is shown in
+// place.
 //
 // `columns` lays namespaces beside repositories (Settings, where there is
 // room); `compact` stacks a namespace select over the list (the Gallery's
-// popover).
+// popover). The search box is a combobox over the result list: arrows move
+// the highlighted row (scrolled into view), Enter picks it, Escape closes the
+// browser and nothing behind it.
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Plus, RefreshCw, Search } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { ArrowRight, Check, Plus, RefreshCw, Search } from "lucide-react";
 import { IconButton } from "../../components/ui";
 import { useStore } from "../../lib/store";
 import type { MediaNamespace } from "../../lib/types";
@@ -27,11 +31,13 @@ const GROUPS: { kind: MediaNamespace["kind"]; label: string }[] = [
   { kind: "shared", label: "Shared with you" },
 ];
 
-/** `namespace/name`, normalized, when `text` is one. */
+/** `namespace/name`, normalized, when `text` is one. All-dot halves are
+ *  refused, as the backend refuses them. */
 export function asRepo(text: string): string | null {
   const clean = text.trim().replace(/^\/+|\/+$/g, "");
   const [ns, name, ...rest] = clean.split("/");
-  return rest.length === 0 && ns && name && NAME.test(ns) && NAME.test(name) ? `${ns}/${name}` : null;
+  const ok = (s: string | undefined) => !!s && NAME.test(s) && !/^\.+$/.test(s);
+  return rest.length === 0 && ok(ns) && ok(name) ? `${ns}/${name}` : null;
 }
 
 type Row =
@@ -46,7 +52,7 @@ export function RepositoryBrowser({
   onDone,
 }: {
   root: string;
-  /** The repository in effect (`namespace/name`), highlighted. */
+  /** The repository in effect (`namespace/name`), marked "in use". */
   current: string | null;
   layout: "columns" | "compact";
   /** After a successful switch (or Escape). */
@@ -55,13 +61,18 @@ export function RepositoryBrowser({
   const listed = useStore((s) => s.mediaNamespaces);
   const load = useStore((s) => s.loadMediaNamespaces);
   const choose = useStore((s) => s.chooseMediaDestination);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // A failed listing (waits for the refresh button) and a refused pick
+  // (the hub's reason for that one choice) are kept apart.
+  const [listError, setListError] = useState<string | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
   const search = useRef<HTMLInputElement>(null);
+  const rowRefs = useRef(new Map<number, HTMLButtonElement>());
+  const listId = useId();
 
   // Two repositories the hub may not list yet but that work: your own
   // `playground` (its default, made on first use) and the one in effect.
@@ -79,101 +90,145 @@ export function RepositoryBrowser({
 
   function list(force: boolean) {
     setLoading(true);
-    setError(null);
+    setListError(null);
     load(force)
-      .catch((e) => setError(String(e)))
+      .catch((e) => setListError(String(e)))
       .finally(() => setLoading(false));
   }
 
+  // List on open, and again whenever the cache is dropped (a new key was
+  // saved while the browser is open). A failure waits for the refresh button.
   useEffect(() => {
-    list(false);
-    search.current?.focus();
-    // Once per mount; the refresh button forces a re-list.
+    if (listed === null && !loading && !listError) list(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listed]);
+
+  useEffect(() => {
+    search.current?.focus();
   }, []);
 
-  // Start on the namespace of the repository in effect.
-  useEffect(() => {
-    if (!namespaces || selected) return;
-    const home = current?.split("/")[0]?.toLowerCase();
-    setSelected((namespaces.find((n) => n.name.toLowerCase() === home) ?? namespaces[0])?.name ?? null);
-  }, [namespaces, current, selected]);
+  // The namespace on show: the one picked here while it still exists, else
+  // the one the repository in effect lives in, else the first.
+  const namespace = useMemo(() => {
+    if (!namespaces) return null;
+    const byName = (name: string | null | undefined) =>
+      name ? namespaces.find((n) => n.name.toLowerCase() === name.toLowerCase()) : undefined;
+    return byName(picked) ?? byName(current?.split("/")[0]) ?? namespaces[0] ?? null;
+  }, [namespaces, picked, current]);
 
-  const namespace = namespaces?.find((n) => n.name === selected) ?? null;
   const needle = query.trim().toLowerCase();
   const typed = asRepo(query);
+  const searching = !!needle && !typed;
 
-  const rows = useMemo<Row[]>(() => {
-    if (!namespaces) return [];
+  const { rows, truncated } = useMemo(() => {
     const out: Row[] = [];
-    if (typed) {
-      out.push({ kind: "use", full: typed });
-      return out;
-    }
-    const pool = needle ? namespaces : namespace ? [namespace] : [];
+    if (!namespaces) return { rows: out, truncated: false };
+    if (typed) return { rows: [{ kind: "use" as const, full: typed }], truncated: false };
+    const pool = searching ? namespaces : namespace ? [namespace] : [];
+    let cut = false;
     for (const ns of pool) {
       for (const repo of ns.repos) {
         const full = `${ns.name}/${repo}`;
-        if (!needle || full.toLowerCase().includes(needle)) out.push({ kind: "repo", full, namespace: ns.name, repo });
-        if (out.length >= MAX_RESULTS) break;
+        if (searching && !full.toLowerCase().includes(needle)) continue;
+        if (out.length >= MAX_RESULTS) {
+          cut = true;
+          break;
+        }
+        out.push({ kind: "repo", full, namespace: ns.name, repo });
       }
+      if (cut) break;
     }
     const fresh = query.trim();
     if (
       namespace?.can_create &&
       NAME.test(fresh) &&
+      !/^\.+$/.test(fresh) &&
       !namespace.repos.some((r) => r.toLowerCase() === fresh.toLowerCase())
     )
       out.push({ kind: "create", full: `${namespace.name}/${fresh}` });
-    return out;
-  }, [namespaces, namespace, needle, typed, query]);
+    return { rows: out, truncated: cut };
+  }, [namespaces, namespace, needle, typed, searching, query]);
 
-  useEffect(() => setCursor(0), [needle, selected]);
+  useEffect(() => setCursor(0), [needle, namespace?.name]);
+  // A refresh can shrink the list under the highlight.
+  const active = rows.length ? Math.min(cursor, rows.length - 1) : -1;
+  useEffect(() => {
+    rowRefs.current.get(active)?.scrollIntoView?.({ block: "nearest" });
+  }, [active]);
 
   async function pick(full: string) {
     if (busy) return;
     setBusy(true);
-    setError(null);
+    setPickError(null);
     try {
       await choose(root, full);
       onDone();
     } catch (e) {
-      setError(String(e));
+      setPickError(String(e));
     } finally {
       setBusy(false);
+      search.current?.focus();
     }
   }
 
-  function onKey(e: React.KeyboardEvent) {
+  function selectNamespace(name: string) {
+    setPicked(name);
+    setQuery("");
+    search.current?.focus();
+  }
+
+  // Escape from anywhere inside closes only the browser (Settings closes on
+  // a window-level Escape); arrows and Enter drive the list from the box.
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      onDone();
+      return;
+    }
+    if (e.target !== search.current) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const step = e.key === "ArrowDown" ? 1 : -1;
-      setCursor((c) => (rows.length ? (c + step + rows.length) % rows.length : 0));
-    } else if (e.key === "Enter" && rows[cursor]) {
+      setCursor(rows.length ? (active + step + rows.length) % rows.length : 0);
+    } else if (e.key === "Enter" && rows[active]) {
       e.preventDefault();
-      void pick(rows[cursor].full);
-    } else if (e.key === "Escape") {
-      e.stopPropagation();
-      onDone();
+      void pick(rows[active].full);
     }
   }
 
-  const searching = !!needle && !typed;
   const isCurrent = (full: string) => full.toLowerCase() === current?.toLowerCase();
+  const rowId = (i: number) => `${listId}-row-${i}`;
+  const caption = !namespaces
+    ? null
+    : typed
+      ? "Checked with Oxen.ai before switching"
+      : searching
+        ? `${truncated ? `First ${MAX_RESULTS}` : rows.filter((r) => r.kind === "repo").length} matching across all namespaces` +
+          (namespace?.can_create ? ` · a new name goes in ${namespace.name}` : "")
+        : namespace
+          ? namespace.can_create
+            ? `${namespace.name} — pick one, or type a new name to create it`
+            : `${namespace.name} — shared with you; switching needs editor access`
+          : "";
 
   return (
-    <div className={`repo-browser repo-browser-${layout}`}>
+    <div className={`repo-browser repo-browser-${layout}`} onKeyDown={onKeyDown}>
       <div className="repo-browser-search">
         <Search size={14} aria-hidden="true" />
         <input
           ref={search}
           type="search"
+          role="combobox"
+          aria-expanded={true}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={active >= 0 ? rowId(active) : undefined}
+          aria-busy={busy}
           placeholder={layout === "columns" ? "Search all repositories, or type namespace/name" : "Search, or type namespace/name"}
           aria-label="Search repositories"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={onKey}
-          disabled={busy}
+          readOnly={busy}
         />
         <IconButton
           aria-label="Refresh the list from Oxen.ai"
@@ -185,9 +240,9 @@ export function RepositoryBrowser({
         </IconButton>
       </div>
 
-      {error && (
+      {(listError || pickError) && (
         <div className="repo-browser-error" role="alert">
-          {error}
+          {pickError ?? listError}
         </div>
       )}
 
@@ -201,22 +256,22 @@ export function RepositoryBrowser({
                 return (
                   <div key={kind} className="repo-browser-group">
                     <div className="repo-browser-group-label">{label}</div>
-                    {group.map((n) => (
-                      <button
-                        key={n.name}
-                        type="button"
-                        className={`repo-browser-ns ${n.name === selected && !searching ? "on" : ""}`}
-                        aria-pressed={n.name === selected}
-                        onClick={() => {
-                          setSelected(n.name);
-                          setQuery("");
-                          search.current?.focus();
-                        }}
-                      >
-                        <span className="repo-browser-ns-name">{n.name}</span>
-                        <span className="repo-browser-count">{n.role ?? n.repos.length}</span>
-                      </button>
-                    ))}
+                    {group.map((n) => {
+                      const on = n.name === namespace?.name;
+                      return (
+                        <button
+                          key={n.name}
+                          type="button"
+                          className={`repo-browser-ns ${on ? "on" : ""}`}
+                          aria-current={on ? "true" : undefined}
+                          title={n.role ? `${n.name} · ${n.role}` : n.name}
+                          onClick={() => selectNamespace(n.name)}
+                        >
+                          <span className="repo-browser-ns-name">{n.name}</span>
+                          <span className="repo-browser-count">{n.repos.length}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 );
               })}
@@ -225,11 +280,8 @@ export function RepositoryBrowser({
             <select
               className="repo-browser-select"
               aria-label="Namespace"
-              value={selected ?? ""}
-              onChange={(e) => {
-                setSelected(e.target.value);
-                setQuery("");
-              }}
+              value={namespace?.name ?? ""}
+              onChange={(e) => selectNamespace(e.target.value)}
             >
               {GROUPS.map(({ kind, label }) => {
                 const group = namespaces.filter((n) => n.kind === kind);
@@ -246,51 +298,55 @@ export function RepositoryBrowser({
             </select>
           ))}
 
-        <div className="repo-browser-list" role="listbox" aria-label="Repositories">
+        <div className="repo-browser-results">
           {!namespaces && loading && <div className="repo-browser-empty">Loading repositories from Oxen.ai…</div>}
-          {namespaces && (
-            <div className="repo-browser-caption">
-              {typed
-                ? "Checked with Oxen.ai before switching"
-                : searching
-                  ? `${rows.filter((r) => r.kind === "repo").length} matching across all namespaces`
-                  : namespace
-                    ? namespace.can_create
-                      ? `${namespace.name} — pick one, or type a new name to create it`
-                      : `${namespace.name} — repositories shared with you`
-                    : ""}
-            </div>
-          )}
-          {rows.map((row, i) => (
-            <button
-              key={`${row.kind}:${row.full}`}
-              type="button"
-              role="option"
-              aria-selected={isCurrent(row.full)}
-              className={`repo-browser-row ${i === cursor ? "cursor" : ""} ${isCurrent(row.full) ? "current" : ""}`}
-              disabled={busy}
-              onMouseEnter={() => setCursor(i)}
-              onClick={() => void pick(row.full)}
-            >
-              {row.kind === "repo" ? (
-                <span className="repo-browser-row-name">
-                  {searching && <span className="repo-browser-row-ns">{row.namespace}/</span>}
-                  {row.repo}
+          {caption && <div className="repo-browser-caption">{caption}</div>}
+          <div className="repo-browser-list" id={listId} role="listbox" aria-label="Repositories">
+            {rows.map((row, i) => (
+              <button
+                key={`${row.kind}:${row.full}`}
+                id={rowId(i)}
+                ref={(el) => {
+                  if (el) rowRefs.current.set(i, el);
+                  else rowRefs.current.delete(i);
+                }}
+                type="button"
+                role="option"
+                tabIndex={-1}
+                aria-selected={i === active}
+                className={`repo-browser-row ${i === active ? "cursor" : ""} ${isCurrent(row.full) ? "current" : ""}`}
+                disabled={busy}
+                onMouseEnter={() => setCursor(i)}
+                onClick={() => void pick(row.full)}
+              >
+                {row.kind !== "repo" &&
+                  (row.kind === "use" ? (
+                    <ArrowRight size={13} className="repo-browser-row-icon" aria-hidden="true" />
+                  ) : (
+                    <Plus size={13} className="repo-browser-row-icon" aria-hidden="true" />
+                  ))}
+                <span className="repo-browser-row-text">
+                  {row.kind === "repo" ? (
+                    <>
+                      {searching && <span className="repo-browser-row-ns">{row.namespace}/</span>}
+                      {row.repo}
+                    </>
+                  ) : row.kind === "use" ? (
+                    `Use ${row.full}`
+                  ) : (
+                    `Create ${row.full}`
+                  )}
                 </span>
-              ) : (
-                <span className="repo-browser-row-name">
-                  <Plus size={13} aria-hidden="true" /> {row.kind === "use" ? `Use ${row.full}` : `Create ${row.full}`}
-                </span>
-              )}
-              {isCurrent(row.full) ? (
-                <span className="repo-browser-tag">
-                  <Check size={12} aria-hidden="true" /> in use
-                </span>
-              ) : row.kind === "create" ? (
-                <span className="repo-browser-tag">created on first use</span>
-              ) : null}
-            </button>
-          ))}
+                {isCurrent(row.full) ? (
+                  <span className="repo-browser-tag">
+                    <Check size={12} aria-hidden="true" /> in use
+                  </span>
+                ) : row.kind === "create" ? (
+                  <span className="repo-browser-tag">created on first use</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
           {namespaces && !rows.length && (
             <div className="repo-browser-empty">
               {needle ? "Nothing matches. Type namespace/name to use another repository." : "No repositories here yet."}

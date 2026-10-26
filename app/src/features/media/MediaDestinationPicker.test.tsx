@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -42,12 +42,14 @@ describe("MediaDestinationPicker", () => {
 
   it("searches every namespace at once, and Enter takes the highlighted row", async () => {
     const user = await openPicker();
-    await user.type(screen.getByRole("searchbox", { name: "Search repositories" }), "play");
+    await user.type(screen.getByRole("combobox", { name: "Search repositories" }), "play");
     const names = repos()
       .getAllByRole("option")
       .map((o) => o.textContent);
-    // Matches from every namespace, then the typed name as a new repository.
-    expect(names).toEqual(["me/playground in use", "ox/playground", " Create me/playcreated on first use"]);
+    // Matches from every namespace, then the typed name as a new repository
+    // in the namespace on show — which the caption names.
+    expect(names).toEqual(["me/playground in use", "ox/playground", "Create me/playcreated on first use"]);
+    expect(screen.getByText(/2 matching across all namespaces · a new name goes in me/)).toBeInTheDocument();
     await user.keyboard("{ArrowDown}{Enter}");
     expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w", "ox/playground");
   });
@@ -56,11 +58,11 @@ describe("MediaDestinationPicker", () => {
     const user = await openPicker();
     const namespace = screen.getByRole("combobox", { name: "Namespace" });
     await user.selectOptions(namespace, "ox");
-    await user.type(screen.getByRole("searchbox", { name: "Search repositories" }), "moodboard");
+    await user.type(screen.getByRole("combobox", { name: "Search repositories" }), "moodboard");
     expect(repos().queryByRole("option", { name: /Create/ })).not.toBeInTheDocument();
 
     await user.selectOptions(namespace, "me");
-    await user.type(screen.getByRole("searchbox", { name: "Search repositories" }), "moodboard");
+    await user.type(screen.getByRole("combobox", { name: "Search repositories" }), "moodboard");
     await user.click(repos().getByRole("option", { name: /Create me\/moodboard/ }));
     expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w", "me/moodboard");
   });
@@ -70,7 +72,7 @@ describe("MediaDestinationPicker", () => {
       "you can't write to `ox/public` (your access: viewer); it needs the admin or editor role",
     );
     const user = await openPicker();
-    await user.type(screen.getByRole("searchbox", { name: "Search repositories" }), "ox/public");
+    await user.type(screen.getByRole("combobox", { name: "Search repositories" }), "ox/public");
     await user.click(repos().getByRole("option", { name: /Use ox\/public/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("your access: viewer");
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -98,6 +100,40 @@ describe("MediaDestinationPicker", () => {
     await user.click(await screen.findByRole("button", { name: "Repository: Studio/shots" }));
     await user.click(screen.getByRole("button", { name: /Use the default/ }));
     expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w", null);
+  });
+});
+
+describe("MediaDestinationPicker failures", () => {
+  it("says the repository is unknown when the lookup fails, and retries on open", async () => {
+    ipc.mediaDestination.mockRejectedValueOnce("network error: offline");
+    const user = userEvent.setup();
+    render(<MediaDestinationPicker root="/w" />);
+    const button = await screen.findByRole("button", { name: "Repository: repository unknown" });
+    expect(button).toHaveAttribute("title", expect.stringContaining("offline"));
+    await user.click(button);
+    expect(await screen.findByRole("button", { name: "Repository: me/playground" })).toBeInTheDocument();
+  });
+
+  it("Escape closes the picker and nothing behind it", async () => {
+    const behind = vi.fn();
+    window.addEventListener("keydown", behind);
+    const user = await openPicker();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(behind).not.toHaveBeenCalledWith(expect.objectContaining({ key: "Escape" }));
+    window.removeEventListener("keydown", behind);
+  });
+
+  it("re-lists for a new key while open, never showing the old account's namespaces", async () => {
+    const user = await openPicker();
+    ipc.listMediaNamespaces.mockResolvedValueOnce([
+      { name: "newme", kind: "user", role: null, can_create: true, repos: ["art"] },
+    ]);
+    act(() => useStore.getState().resetHubIdentity());
+    expect(await screen.findByRole("combobox", { name: "Namespace" })).toHaveValue("newme");
+    expect(repos().getByRole("option", { name: /art/ })).toBeInTheDocument();
+    expect(useStore.getState().mediaDestinations["/w"]).toBeUndefined();
+    expect(user).toBeDefined();
   });
 });
 

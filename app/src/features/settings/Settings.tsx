@@ -201,6 +201,7 @@ function ConnectionSettings() {
   const session = useStore((s) => s.session);
   const adoptSession = useStore((s) => s.adoptSession);
   const refreshHistory = useStore((s) => s.refreshHistory);
+  const resetHubIdentity = useStore((s) => s.resetHubIdentity);
 
   const [host, setHost] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -234,7 +235,7 @@ function ConnectionSettings() {
       adoptSession(info);
       refreshHistory();
       // A different key or host can write to different repositories.
-      useStore.setState({ mediaNamespaces: null });
+      resetHubIdentity();
       setStatus({ ok: true, msg: "Saved — started a fresh chat on the new settings." });
     } catch (e) {
       setStatus({ ok: false, msg: String(e) });

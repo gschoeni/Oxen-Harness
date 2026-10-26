@@ -24,6 +24,7 @@ export const SOURCE_LABEL: Record<MediaDestination["source"], string> = {
 
 export function MediaDestinationPicker({ root }: { root: string }) {
   const destination = useStore((s) => s.mediaDestinations[root]);
+  const lookupError = useStore((s) => s.mediaDestinationErrors[root]);
   const refresh = useStore((s) => s.refreshMediaDestination);
   const choose = useStore((s) => s.chooseMediaDestination);
   const { open, setOpen, ref } = useMenuState();
@@ -33,7 +34,8 @@ export function MediaDestinationPicker({ root }: { root: string }) {
     void refresh(root);
   }, [root, refresh]);
 
-  const label = destination?.repo ?? "your playground";
+  // Unknown is said as unknown: a failed lookup never reads as a destination.
+  const label = destination?.repo ?? (lookupError ? "repository unknown" : "your playground");
 
   return (
     <div className="media-dest" ref={ref}>
@@ -42,8 +44,19 @@ export function MediaDestinationPicker({ root }: { root: string }) {
         size="sm"
         variant="ghost"
         className="picker-btn media-dest-btn"
-        onClick={() => setOpen((o) => !o)}
-        title={destination ? `${label} — ${SOURCE_LABEL[destination.source]}` : "The Oxen repository this project's assets go to"}
+        onClick={() => {
+          setError(null);
+          // Opening after a failed lookup also tries it again.
+          if (!open && lookupError) void refresh(root);
+          setOpen((o) => !o);
+        }}
+        title={
+          destination
+            ? `${label} — ${SOURCE_LABEL[destination.source]}`
+            : lookupError
+              ? `Couldn't reach Oxen.ai: ${lookupError}`
+              : "The Oxen repository this project's assets go to"
+        }
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Repository: ${label}`}

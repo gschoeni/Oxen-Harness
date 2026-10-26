@@ -11,6 +11,8 @@ export function resetAll() {
   // Streamed tokens buffer outside the store; a burst left pending by one
   // test must not land in the next test's threads.
   useStore.getState().flushTokens();
+  // Drops the repository picker's in-flight listing and request tickets.
+  useStore.getState().resetHubIdentity();
   resetIpc();
   resetUiState();
   useUpdate.setState({ status: null, checking: false, installing: false, error: null });
@@ -45,6 +47,7 @@ export function resetAll() {
     mediaPrefs: null,
     mediaFocus: null,
     mediaDestinations: {},
+    mediaDestinationErrors: {},
     mediaNamespaces: null,
     pendingAttachments: [],
     previews: {},

@@ -13,16 +13,6 @@ import { RepositoryBrowser } from "../media/RepositoryBrowser";
 
 export function ProjectRepositorySection() {
   const project = useActiveProject();
-  const destination = useStore((s) => (project ? s.mediaDestinations[project.path] : undefined));
-  const refresh = useStore((s) => s.refreshMediaDestination);
-  const choose = useStore((s) => s.chooseMediaDestination);
-  const [browsing, setBrowsing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (project) void refresh(project.path);
-  }, [project?.path, refresh]); // eslint-disable-line react-hooks/exhaustive-deps
-
   return (
     <section className="settings-section" aria-label="Project repository">
       <div className="settings-section-head">
@@ -31,7 +21,7 @@ export function ProjectRepositorySection() {
           {project && (
             <span className="settings-scope" title={project.path}>
               <FolderOpen size={12} aria-hidden="true" />
-              {project.name}
+              <span className="settings-scope-name">{project.name}</span>
             </span>
           )}
         </h3>
@@ -41,71 +31,102 @@ export function ProjectRepositorySection() {
             : "Open a project to choose the repository its assets go to."}
         </p>
       </div>
-      {project && (
-        <div className={`project-repository ${browsing ? "browsing" : ""}`}>
-          <div className="project-repository-card">
-            <CloudUpload size={18} className="project-repository-icon" aria-hidden="true" />
-            <div className="project-repository-text">
-              <span className="project-repository-name">{destination?.repo ?? "Your playground"}</span>
-              <span className="project-repository-origin">
-                {destination ? SOURCE_LABEL[destination.source] : "Looking it up…"}
-              </span>
-            </div>
-            {destination?.source === "project" && !browsing && (
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                title="Go back to the project remote, the Settings → Media default, or your playground"
-                onClick={() => {
-                  setError(null);
-                  choose(project.path, null).catch((e) => setError(String(e)));
-                }}
-              >
-                <RotateCcw size={13} /> Use default
-              </Button>
-            )}
-            {destination?.web_url && (
-              <IconButton
-                aria-label="Open the repository on Oxen.ai"
-                title={destination.web_url}
-                onClick={() => void openExternal(destination.web_url ?? undefined)}
-              >
-                <ExternalLink size={15} />
-              </IconButton>
-            )}
+      {/* Keyed by project: switching projects starts from a closed browser
+          with no leftover query or error. */}
+      {project && <ProjectRepository key={project.path} root={project.path} />}
+    </section>
+  );
+}
+
+function ProjectRepository({ root }: { root: string }) {
+  const destination = useStore((s) => s.mediaDestinations[root]);
+  const lookupError = useStore((s) => s.mediaDestinationErrors[root]);
+  const refresh = useStore((s) => s.refreshMediaDestination);
+  const choose = useStore((s) => s.chooseMediaDestination);
+  const [browsing, setBrowsing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void refresh(root);
+  }, [root, refresh]);
+
+  const origin = destination
+    ? SOURCE_LABEL[destination.source]
+    : lookupError
+      ? `Couldn't reach Oxen.ai: ${lookupError}`
+      : "Looking it up…";
+
+  return (
+    <>
+      <div className={`project-repository ${browsing ? "browsing" : ""}`}>
+        <div className="project-repository-card">
+          <CloudUpload size={18} className="project-repository-icon" aria-hidden="true" />
+          <div className="project-repository-text">
+            <span className="project-repository-name">{destination?.repo ?? "Your playground"}</span>
+            <span className={`project-repository-origin ${lookupError && !destination ? "error" : ""}`}>{origin}</span>
+          </div>
+          {lookupError && !destination && (
+            <Button type="button" size="sm" variant="ghost" onClick={() => void refresh(root)}>
+              Retry
+            </Button>
+          )}
+          {destination?.source === "project" && !browsing && (
             <Button
               type="button"
               size="sm"
-              variant={browsing ? "ghost" : "outline"}
-              aria-expanded={browsing}
-              onClick={() => setBrowsing((b) => !b)}
+              variant="ghost"
+              title="Go back to the project remote, the Settings → Media default, or your playground"
+              onClick={() => {
+                setError(null);
+                choose(root, null).catch((e) => setError(String(e)));
+              }}
             >
-              {browsing ? "Done" : "Change"}
-              {browsing ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+              <RotateCcw size={13} /> Use default
             </Button>
-          </div>
-          {browsing && (
-            <RepositoryBrowser
-              root={project.path}
-              current={destination?.repo ?? null}
-              layout="columns"
-              onDone={() => setBrowsing(false)}
-            />
           )}
+          {destination?.web_url && (
+            <IconButton
+              aria-label="Open the repository on Oxen.ai"
+              title={destination.web_url}
+              onClick={() => void openExternal(destination.web_url ?? undefined)}
+            >
+              <ExternalLink size={15} />
+            </IconButton>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            variant={browsing ? "ghost" : "outline"}
+            aria-expanded={browsing}
+            onClick={() => {
+              setError(null);
+              setBrowsing((b) => !b);
+            }}
+          >
+            {browsing ? "Done" : "Change"}
+            {browsing ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </Button>
         </div>
-      )}
+        {browsing && (
+          <RepositoryBrowser
+            root={root}
+            current={destination?.repo ?? null}
+            layout="columns"
+            onDone={() => setBrowsing(false)}
+          />
+        )}
+      </div>
       {error && (
         <div className="repo-browser-error" role="alert">
           {error}
         </div>
       )}
-      {project && !browsing && (
+      {!browsing && (
         <p className="hint">
           Pick any repository you can write to, or name a new one in your own namespace or an
           organization you edit — it's created on first use. In a chat: <code>/repository</code>.
         </p>
       )}
-    </section>
+    </>
   );
 }
