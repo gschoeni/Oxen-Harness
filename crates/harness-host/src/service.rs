@@ -34,6 +34,28 @@ use crate::bridges::{
 };
 use crate::{translate, EventSink, PendingApprovals, PendingQuestions};
 
+/// The image files a stored user message carried, in order: the parts the
+/// attachment store wrote under the project, resolved against `root`. Inline
+/// (`data:`) and remote images have no file to point a chip at.
+fn stored_images(content: &harness_llm::MessageContent, root: &Path) -> Vec<PathBuf> {
+    let harness_llm::MessageContent::Parts(parts) = content else {
+        return Vec::new();
+    };
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            harness_llm::ContentPart::ImageUrl { image_url } => Some(image_url.url.as_str()),
+            _ => None,
+        })
+        .filter(|url| {
+            !["data:", "http://", "https://"]
+                .iter()
+                .any(|p| url.starts_with(p))
+        })
+        .map(|rel| root.join(rel))
+        .collect()
+}
+
 /// The workspace's stream rules, compiled. A rule whose pattern no longer
 /// compiles is skipped rather than taking the session down — that policy lives
 /// in `harness_agent::rules::compile_all`, shared with the CLI.
@@ -1196,14 +1218,56 @@ impl SessionService {
         fresh
     }
 
-    /// The session's reference-media registry, created on first sight.
-    fn refs_for(&self, session: &str) -> Arc<harness_media::MediaRefs> {
-        self.session_refs
+    /// The session's reference-media registry, created on first sight. The
+    /// registry lives in memory, so a chat reopened after a restart gets its
+    /// image chips back from the stored transcript; without that, "redo
+    /// [Image #1]" fails even though the image is right there in the history.
+    fn refs_for(&self, session: &str) -> Result<Arc<harness_media::MediaRefs>, String> {
+        if let Some(existing) = self
+            .session_refs
             .lock()
-            .expect("session refs poisoned")
+            .map_err(|_| "session refs poisoned".to_string())?
+            .get(session)
+        {
+            return Ok(existing.clone());
+        }
+        let restored = Arc::new(harness_media::MediaRefs::new());
+        self.restore_refs(session, &restored)?;
+        // Built outside the lock (it reads the store); a registry another
+        // caller made meanwhile wins, so both hand out the same chips.
+        Ok(self
+            .session_refs
+            .lock()
+            .map_err(|_| "session refs poisoned".to_string())?
             .entry(session.to_string())
-            .or_default()
-            .clone()
+            .or_insert(restored)
+            .clone())
+    }
+
+    /// Stage the image chips of a session's earlier turns from the full
+    /// stored transcript (not the compacted context, which may have dropped
+    /// the message that introduced a chip).
+    fn restore_refs(&self, session: &str, refs: &harness_media::MediaRefs) -> Result<(), String> {
+        let store = self.store()?;
+        let failed = |e: HistoryError| format!("restoring attachments for session {session}: {e}");
+        let messages = store
+            .messages_typed_after::<harness_llm::ChatMessage>(session, -1)
+            .map_err(failed)?;
+        let turns: Vec<&harness_llm::MessageContent> = messages
+            .iter()
+            .filter(|m| m.role == "user")
+            .filter_map(|m| m.content.as_ref())
+            .collect();
+        if turns.is_empty() {
+            return Ok(());
+        }
+        let root = PathBuf::from(store.session_meta(session).map_err(failed)?.workspace);
+        refs.restore_images(
+            turns
+                .into_iter()
+                .map(|content| (content.as_text(), stored_images(content, &root))),
+        );
+        Ok(())
     }
 
     /// The media library for a project root, created (and its change feed
@@ -1546,7 +1610,7 @@ impl SessionService {
             workspace_root,
             harness_runtime::media::prefs_for(workspace_root),
             harness_runtime::media::api(),
-            self.refs_for(session),
+            self.refs_for(session)?,
             self.media_library_for(workspace_root),
             Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
         )
@@ -1571,7 +1635,7 @@ impl SessionService {
                     workspace_root,
                     harness_runtime::media::prefs_for(workspace_root),
                     harness_runtime::media::api(),
-                    self.refs_for(session),
+                    self.refs_for(session)?,
                     self.media_library_for(workspace_root),
                     Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
                 )
@@ -2188,7 +2252,7 @@ impl SessionService {
         // Stage each media attachment under a chip label and name it in the
         // prompt, so the model can hand "[Image #2]" back to the generation
         // tools as a reference.
-        let refs = self.refs_for(session);
+        let refs = self.refs_for(session)?;
         let mut labels = Vec::new();
         for path in &attachments {
             if let Some(label) = refs.stage(path) {

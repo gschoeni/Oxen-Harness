@@ -1600,3 +1600,86 @@ async fn cancelling_a_generation_no_process_is_running_settles_it() {
     service.cancel_media("local-ghost").await.unwrap();
     assert_eq!(status(&service).as_deref(), Some("cancelled"));
 }
+
+/// A valid 1×1 PNG, the smallest real image an attachment can carry.
+const PNG_1X1: [u8; 70] = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f,
+    0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47, 0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+#[tokio::test]
+async fn image_chips_survive_reopening_the_chat_in_a_fresh_service() {
+    isolate_config_home();
+    let mut server = mockito::Server::new_async().await;
+    let workspace = tempfile::tempdir().unwrap();
+    let store = Arc::new(HistoryStore::open_in_memory().unwrap());
+    let url = server.url();
+    let service_on = |store: Arc<HistoryStore>| {
+        let url = url.clone();
+        Arc::new(
+            SessionService::builder(Arc::new(CollectingSink::default()))
+                .cloud_model("claude-opus-4-8")
+                .store(store)
+                .active_project(workspace.path())
+                .client_factory(move |model| Ok(OxenClient::new(url.clone(), "sk-test", model)))
+                .build(),
+        )
+    };
+
+    let first = service_on(store.clone());
+    let session = first.new_session().await.unwrap().session_id;
+    let dropped = workspace.path().join("hero.png");
+    std::fs::write(&dropped, PNG_1X1).unwrap();
+    let m1 = sse_mock(&mut server, FINAL_SSE);
+    first
+        .run_turn(
+            &session,
+            "draw this".into(),
+            vec![dropped.to_string_lossy().into_owned()],
+        )
+        .await
+        .unwrap();
+    m1.assert_async().await;
+    let stored = std::fs::read_dir(workspace.path().join(".oxen-harness/attachments"))
+        .unwrap()
+        .next()
+        .expect("the turn stored its image")
+        .unwrap()
+        .path();
+
+    // The app restarts: a fresh service over the same history. The next turn
+    // drops a new image, then the stored copy again. Staging a known path
+    // hands back its existing label, so the stored copy keeps `[Image #1]`
+    // and the new one numbers after it only if the registry came back from
+    // the history; an empty one would hand the new image `#1`.
+    drop(first);
+    let fresh = workspace.path().join("style.png");
+    std::fs::write(&fresh, PNG_1X1).unwrap();
+    let reopened = service_on(store);
+    let m2 = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::Regex(
+            r"Attached: \[Image #2\] style\.png, \[Image #1\] [0-9a-f]+\.png".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(FINAL_SSE)
+        .expect(1)
+        .create_async()
+        .await;
+    reopened
+        .run_turn(
+            &session,
+            "again".into(),
+            vec![
+                fresh.to_string_lossy().into_owned(),
+                stored.to_string_lossy().into_owned(),
+            ],
+        )
+        .await
+        .unwrap();
+    m2.assert_async().await;
+}

@@ -3086,7 +3086,7 @@ mod tests {
         // A media field in `extra` resolves its labels like `refs` does.
         assert!(
             err.to_string()
-                .contains("isn't an attachment the user has provided"),
+                .contains("[Image #1] isn't an attachment in this chat"),
             "{err}"
         );
         let err = tool

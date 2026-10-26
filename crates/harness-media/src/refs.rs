@@ -11,6 +11,7 @@
 //! uploaded to the hub and presigned (see [`crate::upload`]) before it goes
 //! into a request.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -123,6 +124,9 @@ struct Staged {
 #[derive(Debug, Default)]
 pub struct MediaRefs {
     staged: Mutex<Vec<Staged>>,
+    /// The highest chip number per kind an earlier transcript used, restored
+    /// or not, so a new attachment never reuses a label the model has seen.
+    used: Mutex<HashMap<RefKind, u32>>,
 }
 
 impl MediaRefs {
@@ -141,7 +145,23 @@ impl MediaRefs {
         if let Some(existing) = staged.iter().find(|s| s.path == path) {
             return Some(existing.label.clone());
         }
-        let n = staged.iter().filter(|s| s.kind == kind).count() + 1;
+        // Past the highest number in use, not the count: restored chips can
+        // leave gaps, and a reused number would point at the wrong file.
+        let used = self
+            .used
+            .lock()
+            .expect("media refs poisoned")
+            .get(&kind)
+            .copied()
+            .unwrap_or(0);
+        let n = staged
+            .iter()
+            .filter(|s| s.kind == kind)
+            .filter_map(|s| chip_number(&s.label))
+            .chain([used])
+            .max()
+            .unwrap_or(0)
+            + 1;
         let label = format!("[{} #{n}]", kind.word());
         staged.push(Staged {
             label: label.clone(),
@@ -167,6 +187,51 @@ impl MediaRefs {
             path,
             kind,
         });
+    }
+
+    /// Re-stage the image chips of an earlier run of this chat from its
+    /// transcript, so `[Image #1]` still resolves after the app restarts.
+    /// Each item is one user message: its text (which names the chips) and
+    /// the stored image files it carried, in order. Only chips the message
+    /// introduces are paired, and only when they match its images one to
+    /// one; a message that leaves the pairing ambiguous is skipped rather
+    /// than guessed at. Video and audio aren't stored with the transcript,
+    /// so only images come back.
+    pub fn restore_images(&self, messages: impl IntoIterator<Item = (String, Vec<PathBuf>)>) {
+        for (text, images) in messages {
+            let text = text.as_str();
+            self.reserve_numbers_in(text);
+            let known = self.all();
+            let mut fresh: Vec<String> = Vec::new();
+            for label in chips_in(text, RefKind::Image) {
+                if !known.iter().any(|(l, _)| *l == label) && !fresh.contains(&label) {
+                    fresh.push(label);
+                }
+            }
+            if fresh.is_empty() || fresh.len() != images.len() {
+                continue;
+            }
+            for (label, path) in fresh.iter().zip(images) {
+                if path.exists() {
+                    self.stage_as(label, path);
+                }
+            }
+        }
+    }
+
+    /// Note the highest chip number of each kind `text` mentions.
+    fn reserve_numbers_in(&self, text: &str) {
+        let mut used = self.used.lock().expect("media refs poisoned");
+        for kind in [RefKind::Image, RefKind::Video, RefKind::Audio] {
+            if let Some(n) = chips_in(text, kind)
+                .iter()
+                .filter_map(|l| chip_number(l))
+                .max()
+            {
+                let entry = used.entry(kind).or_insert(0);
+                *entry = (*entry).max(n);
+            }
+        }
     }
 
     /// The file behind a chip label, if that label was handed out.
@@ -241,6 +306,26 @@ fn normalize_label(raw: &str) -> Option<String> {
     Some(format!("[{w} #{digits}]"))
 }
 
+/// The `N` of a `[Word #N]` chip label.
+fn chip_number(label: &str) -> Option<u32> {
+    label.rsplit_once('#')?.1.strip_suffix(']')?.parse().ok()
+}
+
+/// Every `[Word #N]` chip of `kind` in `text`, in order of appearance.
+fn chips_in(text: &str, kind: RefKind) -> Vec<String> {
+    let open = format!("[{} #", kind.word());
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(&open) {
+        rest = &rest[at + open.len()..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if !digits.is_empty() && rest[digits.len()..].starts_with(']') {
+            found.push(format!("{open}{digits}]"));
+        }
+    }
+    found
+}
+
 /// Whether `text` looks like a chip label rather than a path.
 pub fn is_label(text: &str) -> bool {
     normalize_label(text).is_some() && !text.contains('/') && !text.contains('.')
@@ -278,14 +363,18 @@ pub fn resolve(
                     .into_iter()
                     .map(|(l, p)| format!("{l} ({})", file_name(&p)))
                     .collect::<Vec<_>>();
+                // Points the model at a path when the label can't come back:
+                // stored image attachments sit in the project, so a path to
+                // one resolves even when its chip didn't survive.
+                let fallback = "A project file also works as a reference by its path (an \
+                                earlier generation, or an image attachment stored under \
+                                .oxen-harness/attachments/); otherwise ask the user to drop \
+                                the file into the chat again.";
                 ToolError::InvalidArguments(if known.is_empty() {
-                    format!(
-                        "{raw} isn't an attachment the user has provided. Ask them to drop the \
-                         file into the chat, then use its label."
-                    )
+                    format!("{raw} isn't an attachment in this chat. {fallback}")
                 } else {
                     format!(
-                        "{raw} isn't an attachment in this chat. Available: {}",
+                        "{raw} isn't an attachment in this chat. Available: {}. {fallback}",
                         known.join(", ")
                     )
                 })
@@ -365,6 +454,72 @@ mod tests {
             refs.labels_in("use [Image #7] and [Image #8]"),
             vec!["[Image #7]"]
         );
+    }
+
+    #[test]
+    fn new_labels_number_past_the_highest_in_use() {
+        let refs = MediaRefs::new();
+        refs.stage_as("[Image #3]", "/tmp/three.png");
+        assert_eq!(refs.stage("/tmp/next.png").as_deref(), Some("[Image #4]"));
+    }
+
+    #[test]
+    fn restores_image_chips_from_an_earlier_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let stored = |name: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"x").unwrap();
+            path
+        };
+        let (first, second) = (stored("aa.png"), stored("bb.png"));
+        let refs = MediaRefs::new();
+        refs.restore_images(
+            [
+                (
+                    "draw this\n\nAttached: [Image #1] hero.png",
+                    vec![first.clone()],
+                ),
+                // A later message re-mentions #1 beside its own new chip.
+                (
+                    "redo [Image #1] in the style of\n\nAttached: [Image #2] style.png",
+                    vec![second.clone()],
+                ),
+                // Two chips, one stored image: ambiguous, so neither is guessed.
+                (
+                    "Attached: [Image #3] a.png, [Image #4] b.png",
+                    vec![first.clone()],
+                ),
+                // The stored file is gone: nothing to point the chip at.
+                (
+                    "Attached: [Image #5] gone.png",
+                    vec![dir.path().join("gone.png")],
+                ),
+                // Video isn't stored with the transcript, but its number is taken.
+                ("Attached: [Video #2] clip.mp4", vec![]),
+            ]
+            .map(|(text, images)| (text.to_string(), images)),
+        );
+
+        assert_eq!(refs.lookup("[Image #1]"), Some(first));
+        assert_eq!(refs.lookup("[Image #2]"), Some(second));
+        assert_eq!(refs.lookup("[Image #3]"), None);
+        assert_eq!(refs.lookup("[Image #5]"), None);
+        // New attachments number past every chip the transcript mentions,
+        // restored or not, so no label the model has seen gets reused.
+        assert_eq!(refs.stage("/tmp/new.png").as_deref(), Some("[Image #6]"));
+        assert_eq!(refs.stage("/tmp/new.mp4").as_deref(), Some("[Video #3]"));
+    }
+
+    #[test]
+    fn a_missing_label_points_at_paths_as_the_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = resolve(&["[Image #1]".into()], &MediaRefs::new(), dir.path()).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("[Image #1] isn't an attachment in this chat"),
+            "{msg}"
+        );
+        assert!(msg.contains(".oxen-harness/attachments/"), "{msg}");
     }
 
     #[test]
