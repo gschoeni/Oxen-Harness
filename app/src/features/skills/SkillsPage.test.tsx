@@ -267,7 +267,7 @@ describe("SkillsPage", () => {
         releaseNotes.instructions + "\n3. Ship it.",
       ),
     );
-    expect(await screen.findByText("All changes saved")).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent("Saved");
     expect(ipc.deleteSkill).not.toHaveBeenCalled();
   });
 
@@ -297,6 +297,8 @@ describe("SkillsPage", () => {
   it("leaving the editor untouched writes nothing", async () => {
     render(<SkillsPage />);
     await editSkill("release-notes");
+    // Nothing to report yet, so the status beside the name stays quiet.
+    expect(screen.getByRole("status")).toHaveTextContent("");
     await userEvent.click(screen.getByRole("button", { name: "Done" }));
 
     expect(await screen.findByRole("heading", { name: "Steps" })).toBeInTheDocument();

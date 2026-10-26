@@ -19,6 +19,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ArrowLeft,
+  Check,
   ChevronRight,
   Download,
   GraduationCap,
@@ -585,6 +586,7 @@ function SkillEditor({
   const toolNames = tools.map((t) => t.name);
   const project = useActiveProject();
   const [description, setDescription] = useState(skill.description);
+  const [edited, setEdited] = useState(false);
   const [instructions, setInstructions] = useState(skill.instructions);
   const [previewing, setPreviewing] = useState(false);
   const [renaming, setRenaming] = useState<SkillIdentity | null>(null);
@@ -600,6 +602,7 @@ function SkillEditor({
   );
 
   function edit(next: { description: string; instructions: string }) {
+    setEdited(true);
     setDescription(next.description);
     setInstructions(next.instructions);
     autosave.schedule(next);
@@ -657,11 +660,13 @@ function SkillEditor({
 
   const scopeLabel =
     skill.scope === "project" && project ? `project · ${project.name}` : skill.scope;
+  // A quiet note beside the name, like a document's "Saved". It stays empty
+  // until the first edit; a failure also gets the full message below.
   const status = {
-    saved: "All changes saved",
+    saved: edited ? "Saved" : "",
     pending: "Saving…",
     saving: "Saving…",
-    error: `Couldn't save: ${autosave.error}`,
+    error: "Not saved",
   }[autosave.status];
 
   return (
@@ -678,6 +683,15 @@ function SkillEditor({
             {skill.name}
             <span className={`skill-scope ${skill.scope}`} title={skill.dir}>
               {scopeLabel}
+            </span>
+            <span
+              className={`skill-save-status ${autosave.status}`}
+              role="status"
+              aria-live="polite"
+              title={autosave.error ?? undefined}
+            >
+              {autosave.status === "saved" && edited && <Check size={13} />}
+              {status}
             </span>
           </h3>
           {skill.draft && !(description.trim() && instructions.trim()) && <DraftNotice />}
@@ -784,18 +798,14 @@ function SkillEditor({
         </span>
 
         {error && <span className="save-status err">{error}</span>}
+        {autosave.status === "error" && (
+          <span className="save-status err">Couldn't save: {autosave.error}</span>
+        )}
 
         <div className="tool-row-actions tool-editor-actions">
           <Button variant="primary" size="sm" onClick={done} disabled={busy}>
             Done
           </Button>
-          <span
-            className={`save-status ${autosave.status === "error" ? "err" : ""}`}
-            role="status"
-            aria-live="polite"
-          >
-            {status}
-          </span>
           {confirmDelete ? (
             <Button variant="danger" size="sm" onClick={reallyDelete} disabled={busy}>
               Really delete?

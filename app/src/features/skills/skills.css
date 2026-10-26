@@ -334,3 +334,17 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+
+/* Autosave's quiet status, set beside the skill's name in the editor. */
+.skill-save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+.skill-save-status.error {
+  color: var(--danger);
+}
