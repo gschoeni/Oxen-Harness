@@ -752,6 +752,10 @@ the desktop editor autocompletes and lints. This repo ships
 [`add-a-tool`](.oxen-harness/skills/add-a-tool/SKILL.md), a skill that teaches
 the agent to extend itself with new tools.
 
+In the desktop app every enabled skill is also a slash command:
+`/release-notes since v0.4` runs it straight away, even in a chat that was
+already open when the skill was written.
+
 Skills share as files. **Export** on a skill's page saves a `<name>.zip`
 holding its folder, the layout claude.ai's "Upload skill" takes; unzipped, it
 drops straight into `~/.codex/skills/` or `.claude/skills/`. **Import skill**
