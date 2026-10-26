@@ -1726,3 +1726,27 @@ call (`/api/namespaces` 404s on hub.oxen.ai), so the list is built from
 those three. A choice is checked against the hub before it is saved, and the
 refusal (read-only, or a new name outside a creatable namespace) is the
 error the user sees.
+
+**Release hardening (2026-10-25):** a picked repository that doesn't exist
+yet is created by the uploader before the first reference goes up (the
+hub's workbench upload needs an existing repo; only the queue creates one).
+Names that are all dots are refused everywhere, since they land in URL
+paths. The CLI resolves the hub endpoint (`endpoint::hub_base_url`)
+independently of the chat model: a local-model chat still generates media
+and picks repositories on Oxen.ai, never on its llama-server. Who-am-I is
+`GET /api/authorize`; the hub has no `/users/me`.
+
+## Tests never touch the developer's terminal or home (2026-10-25)
+
+**Decision:** test code must not reach the real terminal or
+`~/.oxen-harness`. Terminal mode changes go through the live layer's
+`Sink` (a capture sink is a no-op), because a `tcsetattr` from a test binary
+run as a background job stops it with SIGTTOU indefinitely (one sat for 26
+days). Default cache paths are `None` under `cfg(test)`; a test that
+exercises a cache passes its own path. Renderers take the terminal width as
+a parameter instead of reading it.
+
+**How to check:** run the suite under a throwaway `HOME` and list what
+appears outside `.cargo`/`.rustup` (should be nothing), and run the CLI test
+binary as a job-controlled background process under a pty (`script` +
+`set -m`) — it must finish, not stop.
