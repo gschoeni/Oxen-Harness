@@ -9,6 +9,9 @@
 //    unless the anchor opted out with `target="_blank"`, which here means
 //    "the system browser" (add-credits, API-signup, docs buttons);
 //  - any other scheme (mailto:, custom apps) goes to the system handler;
+//  - a bare path is a project file (the model links what it made:
+//    `[take](generations/…/take.mp4)`) and opens in the Editor/viewer dock.
+//    Resolved against the page URL it would be the app's own address;
 //  - same-page fragments (`href="#…"`) are left alone.
 //
 // The Rust side backstops this (see `nav-guard` in src-tauri/src/lib.rs): a
@@ -36,6 +39,14 @@ function onDocumentClick(e: MouseEvent) {
   if (!anchor) return;
   const href = anchor.getAttribute("href") ?? "";
   if (href.startsWith("#")) return; // in-page navigation is fine
+  if (isPathHref(href)) {
+    e.preventDefault();
+    const path = workspacePath(href, useStore.getState().session?.workspace);
+    // Outside the project there's nothing to show it in, and handing a
+    // model-written path to the OS would launch whatever it names.
+    if (path) useStore.getState().openInViewer([path]);
+    return;
+  }
 
   let url: URL;
   try {
@@ -55,4 +66,27 @@ function onDocumentClick(e: MouseEvent) {
     e.preventDefault();
     openExternal(url.href).catch(() => {});
   }
+}
+
+/** No scheme and not protocol-relative: a filesystem path, not a URL. */
+function isPathHref(href: string): boolean {
+  return !/^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith("//");
+}
+
+/** A path href as a workspace-relative path, or null when it points outside
+ *  the workspace. Drops any `?query` / `#fragment` (a `#L12` line anchor). */
+function workspacePath(href: string, workspace: string | undefined): string | null {
+  let path = href.replace(/[?#].*$/, "");
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // A stray `%` — the path is literal.
+  }
+  if (path.startsWith("/")) {
+    if (!workspace || !path.startsWith(`${workspace}/`)) return null;
+    path = path.slice(workspace.length + 1);
+  }
+  path = path.replace(/^(\.\/)+/, "");
+  if (!path || path.split("/").includes("..")) return null;
+  return path;
 }

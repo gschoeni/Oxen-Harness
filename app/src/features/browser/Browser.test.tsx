@@ -69,6 +69,30 @@ describe("link routing (clicks must never navigate the main webview)", () => {
     expect(ipc.openExternal).toHaveBeenCalledWith("mailto:hi@oxen.ai");
   });
 
+  it("a workspace-relative link opens the file in the viewer, not the app's own URL", async () => {
+    const prevented = await clickLink('<a href="generations/2026-10-26/take%201.mp4">take</a>');
+    expect(prevented).toBe(true);
+    const s = useStore.getState();
+    expect(s.browserUrl).toBeNull();
+    expect(s.editorTabs.s1?.tabs).toEqual([["generations/2026-10-26/take 1.mp4"]]);
+    expect(s.rightTab.s1).toBe("editor");
+  });
+
+  it("an absolute path inside the workspace opens relative to it", async () => {
+    const ws = useStore.getState().session!.workspace;
+    await clickLink(`<a href="${ws}/src/main.rs#L3">main</a>`);
+    expect(useStore.getState().editorTabs.s1?.tabs).toEqual([["src/main.rs"]]);
+  });
+
+  it("a path outside the workspace goes nowhere", async () => {
+    const prevented = await clickLink('<a href="/etc/hosts">hosts</a>');
+    expect(prevented).toBe(true);
+    const s = useStore.getState();
+    expect(s.browserUrl).toBeNull();
+    expect(s.editorTabs.s1).toBeUndefined();
+    expect(ipc.openExternal).not.toHaveBeenCalled();
+  });
+
   it("in-page fragment links are left alone", async () => {
     const prevented = await clickLink('<a href="#section">jump</a>');
     expect(prevented).toBe(false);
