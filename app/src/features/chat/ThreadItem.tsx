@@ -1,4 +1,6 @@
 import { memo } from "react";
+import { GraduationCap } from "lucide-react";
+import { splitSkillBlock } from "../../lib/skillCommand";
 import { Markdown } from "../../components/ui/Markdown";
 import { useThrottled } from "../../lib/useThrottled";
 import { ThinkingIndicator } from "./ThinkingIndicator";
@@ -26,7 +28,7 @@ export const ThreadItem = memo(function ThreadItem({ item }: { item: Item }) {
             ))}
           </div>
         )}
-        {item.text && <div className="msg-user-text">{item.text}</div>}
+        <UserText text={item.text} />
       </div>
     );
   }
@@ -51,6 +53,26 @@ export const ThreadItem = memo(function ThreadItem({ item }: { item: Item }) {
 
   return <ToolCall item={item} />;
 });
+
+/** A user message's text. A skill run as `/<name>` carries the skill's
+ *  instructions (see `skillCommand`); they fold into a chip that opens to
+ *  show exactly what the model was given. */
+function UserText({ text }: { text: string }) {
+  const { text: typed, skill } = splitSkillBlock(text);
+  return (
+    <>
+      {typed && <div className="msg-user-text">{typed}</div>}
+      {skill && (
+        <details className="msg-skill">
+          <summary title={skill.dir}>
+            <GraduationCap size={12} aria-hidden="true" /> Skill · {skill.name}
+          </summary>
+          <div className="msg-skill-body">{skill.instructions}</div>
+        </details>
+      )}
+    </>
+  );
+}
 
 /** How often a streaming reply re-parses its Markdown. Tokens land in the
  *  store every ~50 ms; parsing a long reply that often is the single biggest

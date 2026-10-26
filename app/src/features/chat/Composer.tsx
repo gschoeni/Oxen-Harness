@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState, type DragEvent } from "react";
-import { ArrowUp, FileText, Film, Music, Paperclip, Square } from "lucide-react";
+import { ArrowUp, FileText, Film, GraduationCap, Music, Paperclip, Square } from "lucide-react";
+import { useStore } from "../../lib/store";
 import { StudyButton } from "./StudyButton";
 import { AttachmentImage } from "./AttachmentImage";
 import { CompressionPicker } from "./CompressionPicker";
@@ -81,8 +82,17 @@ export function Composer({
   const [value, setValue] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
-  const suggestions = slashSuggestions(value);
+  const skills = useStore((s) => s.skills);
+  const refreshSkills = useStore((s) => s.refreshSkills);
+  const suggestions = slashSuggestions(value, skills);
   useComposerSize(ref, value);
+
+  // Opening the slash menu re-reads the skills from disk, so one written a
+  // moment ago (in Settings or by hand) is already on offer.
+  const slashOpen = value.startsWith("/");
+  useEffect(() => {
+    if (slashOpen) refreshSkills();
+  }, [slashOpen, refreshSkills]);
 
   // Focus the composer when an empty chat is opened (new chat / initial mount).
   useEffect(() => {
@@ -188,7 +198,7 @@ export function Composer({
               }
               if (
                 suggestions.length &&
-                (e.key === "Tab" || (e.key === "Enter" && !parseSlashCommand(value)))
+                (e.key === "Tab" || (e.key === "Enter" && !parseSlashCommand(value, skills)))
               ) {
                 e.preventDefault();
                 chooseSlash(slashIndex);
@@ -226,6 +236,11 @@ export function Composer({
                 >
                   <code>{command.name}</code>
                   <span>{command.description}</span>
+                  {command.skill && (
+                    <span className="slash-option-kind">
+                      <GraduationCap size={12} aria-hidden="true" /> skill
+                    </span>
+                  )}
                 </button>
               ))}
             </div>

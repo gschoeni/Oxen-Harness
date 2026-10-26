@@ -1,8 +1,13 @@
+import { invocableSkills } from "../../lib/skillCommand";
+import type { SkillInfo } from "../../lib/types";
+
 export interface SlashCommand {
   name: string;
   aliases?: string[];
   description: string;
   usage?: string;
+  /** Set when this command runs a skill (`/<skill-name> [request]`). */
+  skill?: string;
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -26,22 +31,37 @@ export interface ParsedSlashCommand {
   args: string;
 }
 
-export function parseSlashCommand(text: string): ParsedSlashCommand | null {
+/** Every command on offer: the built-ins, then each runnable skill. A
+ *  built-in keeps its name (and aliases) when a skill shares it. */
+export function allCommands(skills: SkillInfo[] = []): SlashCommand[] {
+  const taken = new Set(SLASH_COMMANDS.flatMap((c) => [c.name, ...(c.aliases ?? [])]));
+  const fromSkills = invocableSkills(skills)
+    .map((s) => ({
+      name: `/${s.name}`,
+      description: s.description,
+      usage: `/${s.name} [request]`,
+      skill: s.name,
+    }))
+    .filter((c) => !taken.has(c.name));
+  return [...SLASH_COMMANDS, ...fromSkills];
+}
+
+export function parseSlashCommand(text: string, skills: SkillInfo[] = []): ParsedSlashCommand | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return null;
   const split = trimmed.search(/\s/);
   const invokedAs = split < 0 ? trimmed : trimmed.slice(0, split);
-  const command = SLASH_COMMANDS.find(
+  const command = allCommands(skills).find(
     (entry) => entry.name === invokedAs || entry.aliases?.includes(invokedAs),
   );
   if (!command) return null;
   return { command, invokedAs, args: split < 0 ? "" : trimmed.slice(split).trim() };
 }
 
-export function slashSuggestions(text: string): SlashCommand[] {
+export function slashSuggestions(text: string, skills: SkillInfo[] = []): SlashCommand[] {
   if (!text.startsWith("/") || /\s/.test(text)) return [];
   const query = text.toLowerCase();
-  return SLASH_COMMANDS.filter(
+  return allCommands(skills).filter(
     (entry) => entry.name.startsWith(query) || entry.aliases?.some((alias) => alias.startsWith(query)),
   );
 }

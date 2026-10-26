@@ -61,6 +61,7 @@ import {
   listMedia,
   cancelMedia as cancelMediaIpc,
   getMediaPrefs,
+  listSkills,
 } from "./ipc";
 import {
   appendApiKeyPrompt,
@@ -85,6 +86,7 @@ import { openThreadIds, threadsFromState } from "../features/threads/threads";
 import { partialCanvasDoc } from "./streamingArgs";
 import { nextSpeed, type SpeedState } from "./speed";
 import { withSnippetContext } from "./snippets";
+import { withSkillInstructions } from "./skillCommand";
 import { getUi, setUi } from "./uiState";
 import {
   movedTab,
@@ -149,6 +151,7 @@ import type {
   MediaItem,
   MediaUpload,
   MediaPrefs,
+  SkillInfo,
 } from "./types";
 
 /** One model download the store is tracking — in flight (or failed), keyed by
@@ -649,6 +652,10 @@ interface AppState {
   /** Code selections staged as context for the next prompt, per session —
    *  shown as chips by the composer, baked into the prompt at send time. */
   snippets: Record<string, CodeSnippet[]>;
+  /** The skills visible from the active project, for running one as a slash
+   *  command. Re-read from disk whenever the composer's slash menu opens. */
+  skills: SkillInfo[];
+  refreshSkills: () => void;
   /** Changed files per workspace root (git status). `null` = not a git
    *  repository; absent = not loaded yet. Read by the Files tree's badges and
    *  the editor's "view diff" affordance. */
@@ -1459,6 +1466,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     editorTabs: {},
     fsChange: null,
     snippets: {},
+    skills: [],
     gitStates: {},
     editorWrap: getUi("editorWrap") ?? false,
     dockWidths: loadDockLayout().widths,
@@ -1898,6 +1906,8 @@ export const useStore = create<AppState>((rawSet, get) => {
       // Bake staged code snippets into the prompt now (not at turn time), so a
       // queued prompt carries exactly the context that was on screen when it
       // was written, and the chips clear the moment they're consumed.
+      // A `/<skill>` prompt carries the skill's instructions (see skillCommand).
+      text = withSkillInstructions(text, get().skills);
       const staged = get().snippets[id] ?? [];
       if (staged.length) {
         text = withSnippetContext(text, staged);
@@ -2771,6 +2781,14 @@ export const useStore = create<AppState>((rawSet, get) => {
         delete editorTabs[id];
         return { editorTabs };
       }),
+
+    refreshSkills: () => {
+      listSkills()
+        .then((skills) => set({ skills }))
+        // Progressive enhancement: on failure the menu keeps the last list,
+        // and the Skills page reports the error where it can be acted on.
+        .catch(() => {});
+    },
 
     addSnippet: (snippet) =>
       set((s) => {

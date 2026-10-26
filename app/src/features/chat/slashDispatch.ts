@@ -17,6 +17,7 @@ const help = () => SLASH_COMMANDS.map((c) => `${c.usage ?? c.name} — ${c.descr
 /** Execute recognized desktop commands locally. False means the text is an
  * unknown slash-prefixed prompt and should still be sent to the model. */
 export async function dispatchSlashCommand(text: string): Promise<boolean> {
+  // Skill commands aren't in here: they're prompts, expanded by `send`.
   const parsed = parseSlashCommand(text);
   if (!parsed) return false;
   const state = useStore.getState();

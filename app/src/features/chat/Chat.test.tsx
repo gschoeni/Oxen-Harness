@@ -106,6 +106,39 @@ describe("Chat", () => {
     expect(ipc.runTurn).toHaveBeenCalledWith("s1", "/frobnicate this", []);
   });
 
+  it("runs a skill from the slash menu, read fresh from disk, with its instructions attached", async () => {
+    render(<Chat />);
+    // Written after the chat opened: the menu re-reads skills when it opens.
+    ipc.listSkills.mockResolvedValue([
+      {
+        name: "deploy",
+        description: "Deploys the app.",
+        instructions: "1. Run the deploy script.",
+        scope: "project",
+        dir: "/w/.oxen-harness/skills/deploy",
+        enabled: true,
+        draft: false,
+      },
+    ]);
+    const box = screen.getByPlaceholderText(/ask the agent/i);
+    await userEvent.type(box, "/depl");
+    const option = await screen.findByRole("option", { name: /\/deploy/ });
+    expect(option).toHaveTextContent("Deploys the app.");
+    expect(option).toHaveTextContent("skill");
+
+    await userEvent.keyboard("{Tab}"); // completes the name
+    await userEvent.type(box, "staging");
+    await userEvent.keyboard("{Enter}");
+
+    expect(ipc.runTurn).toHaveBeenCalledTimes(1);
+    const sent = String((ipc.runTurn.mock.calls[0] as unknown[] | undefined)?.[1]);
+    expect(sent).toMatch(/^\/deploy staging\n\n<skill name="deploy"/);
+    expect(sent).toContain("1. Run the deploy script.");
+    // The transcript shows what was typed, with the instructions folded away.
+    expect(await screen.findByText("Skill · deploy")).toBeInTheDocument();
+    expect(document.querySelector(".msg.user .msg-user-text")?.textContent).toBe("/deploy staging");
+  });
+
   it("shows the empty state with the hero game attract screen and example prompts", () => {
     render(<Chat />);
     expect(screen.getByText("OXEN TRAIL")).toBeInTheDocument();
