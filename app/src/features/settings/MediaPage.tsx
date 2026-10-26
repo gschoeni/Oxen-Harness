@@ -263,7 +263,13 @@ function ModelField({
   const options: SelectOption[] = known
     ? [
         ...(models.some((m) => m.id === value) ? [] : [{ value, label: value }]),
-        ...models.map((m) => ({ value: m.id, label: m.id, hint: m.price || undefined })),
+        // The human name leads; the id rides beneath it, so search finds either.
+        ...models.map((m) => ({
+          value: m.id,
+          label: m.display_name || m.id,
+          description: m.display_name ? m.id : undefined,
+          hint: m.price || undefined,
+        })),
       ]
     : [];
   return (

@@ -426,6 +426,9 @@ pub struct MediaUpload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MediaModelSummary {
     pub id: String,
+    /// The catalog's human name (`GPT Image 2.5 Sunburst`), when it has one.
+    #[serde(default)]
+    pub display_name: Option<String>,
     /// `image` or `video`.
     pub kind: String,
     /// `$0.01/image`, `$0.08–$0.17/s`, `unpriced`.

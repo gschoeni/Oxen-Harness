@@ -15,8 +15,8 @@ describe("MediaPage", () => {
     ipc.listMediaModels.mockImplementation(async (kind?: string) =>
       kind === "image"
         ? [
-            { id: "black-forest-labs-flux-2-klein-4b", kind: "image" as const, price: "$0.01/image", developer: null, summary: null, inputs: [] },
-            { id: "nano-banana-2", kind: "image" as const, price: "$0.13/image", developer: null, summary: null, inputs: [] },
+            { id: "black-forest-labs-flux-2-klein-4b", display_name: "FLUX.2 [klein] 4B", kind: "image" as const, price: "$0.01/image", developer: null, summary: null, inputs: [] },
+            { id: "nano-banana-2", display_name: null, kind: "image" as const, price: "$0.13/image", developer: null, summary: null, inputs: [] },
           ]
         : [],
     );
@@ -39,11 +39,13 @@ describe("MediaPage", () => {
       per_generation_usd: null,
     });
 
-    // The image model select lists the catalog with prices; video falls back
-    // to a text field because the catalog returned nothing.
+    // The image model select lists the catalog by display name (the id
+    // beneath, or alone when there is none) with prices; video falls back to
+    // a text field because the catalog returned nothing.
+    expect(screen.getByRole("combobox", { name: "Image" })).toHaveTextContent("FLUX.2 [klein] 4B");
     await userEvent.click(screen.getByRole("combobox", { name: "Image" }));
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "black-forest-labs-flux-2-klein-4b$0.01/image",
+      "FLUX.2 [klein] 4Bblack-forest-labs-flux-2-klein-4b$0.01/image",
       "nano-banana-2$0.13/image",
     ]);
     // The catalog is long, so the picker filters as you type.
@@ -57,7 +59,7 @@ describe("MediaPage", () => {
   });
 
   it("refetches the catalog on demand and keeps the list when the hub is down", async () => {
-    const model = (id: string) => ({ id, kind: "image" as const, price: "", developer: null, summary: null, inputs: [] });
+    const model = (id: string) => ({ id, display_name: null, kind: "image" as const, price: "", developer: null, summary: null, inputs: [] });
     ipc.listMediaModels.mockImplementation(async (kind?: string, refresh?: boolean) =>
       kind === "image" ? (refresh ? [model("old"), model("brand-new")] : [model("old")]) : [],
     );

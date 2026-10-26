@@ -98,7 +98,7 @@ GET    /v1/media?root=                  the project's image/video generations, n
 POST   /v1/media/{generation}/cancel    cancel an in-flight generation by its hub id
 GET    /v1/media/prefs                  media preferences → MediaPrefs {default_image_model, default_video_model, output_dir, per_generation_usd, per_run_usd}
 PUT    /v1/media/prefs                  replace the media preferences (applies to new/resumed chats)
-GET    /v1/media/models?kind=&refresh=  the hub's image/video models (cached a day; refresh=true refetches) → [MediaModelSummary {id, kind, price, developer, summary, inputs}]
+GET    /v1/media/models?kind=&refresh=  the hub's image/video models (cached a day; refresh=true refetches) → [MediaModelSummary {id, display_name, kind, price, developer, summary, inputs}]
 GET    /v1/media/destination?root=      where the project's generations go on the hub → MediaDestination {repo, source: project|project_remote|global|hub_default, web_url}
 PUT    /v1/media/destination            {root, repo} — send the project's generations to `namespace/name` (400 unless the key can write there or the hub will create it); repo null clears the choice; applies to the next generation in open chats too
 GET    /v1/media/namespaces             where the key can send generations → [MediaNamespace {name, kind: user|org|shared, role, can_create, repos}]

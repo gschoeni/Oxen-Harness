@@ -454,6 +454,7 @@ pub fn media_upload(upload: harness_media::MediaUpload) -> harness_protocol::Med
 pub fn media_model(model: &harness_media::MediaModel) -> harness_protocol::MediaModelSummary {
     harness_protocol::MediaModelSummary {
         id: model.id.clone(),
+        display_name: model.display_name.clone(),
         kind: model.kind.as_str().to_string(),
         price: model.price_label(),
         developer: model.developer.clone(),

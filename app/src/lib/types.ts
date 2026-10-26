@@ -1105,6 +1105,8 @@ export interface MediaNamespace {
 /** One image/video model of the hub catalog, for pickers. */
 export interface MediaModelSummary {
   id: string;
+  /** The catalog's human name ("GPT Image 2.5 Sunburst"); null when it has none. */
+  display_name: string | null;
   kind: "image" | "video";
   price: string;
   developer: string | null;
