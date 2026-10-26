@@ -41,8 +41,16 @@ export function splitSkillBlock(text: string): { text: string; skill: SkillBlock
 /** `/<skill> request` → the message plus that skill's instructions. Anything
  *  else (another command, plain text, an already-expanded message) comes
  *  back unchanged. */
+const COMMAND = /^\/([a-z0-9-]+)(?:\s|$)/;
+
+/** Whether `text` opens with a `/<name>` that could be a skill: worth a
+ *  fresh look at the skills before it is sent. */
+export function looksLikeSkillCommand(text: string): boolean {
+  return COMMAND.test(text) && !splitSkillBlock(text).skill;
+}
+
 export function withSkillInstructions(text: string, skills: SkillInfo[]): string {
-  const match = /^\/([a-z0-9-]+)(?:\s|$)/.exec(text);
+  const match = COMMAND.exec(text);
   if (!match || splitSkillBlock(text).skill) return text;
   const skill = invocableSkills(skills).find((s) => s.name === match[1]);
   if (!skill) return text;

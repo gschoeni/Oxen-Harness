@@ -220,6 +220,30 @@ pub fn save_skill(
     write_skill_md(&dir, name, &description, instructions)
 }
 
+/// [`save_skill`] for an editor's autosave: only into a skill that still
+/// exists. A save queued behind a rename or delete that half-failed (or a
+/// folder removed outside the editor) must not quietly recreate the old
+/// skill beside the new one, or bring a deleted one back.
+pub fn update_skill(
+    workspace_root: &Path,
+    scope: SkillScope,
+    name: &str,
+    description: &str,
+    instructions: &str,
+) -> Result<(), RuntimeError> {
+    let name = name.trim();
+    check_name(name)?;
+    let dir = scope_dir(workspace_root, scope)?.join(name);
+    if !dir.join("SKILL.md").is_file() {
+        return Err(RuntimeError::Invalid(format!(
+            "the skill `{name}` is no longer at {} (renamed or deleted?), so this save \
+             would recreate it; reopen it from the skills list",
+            dir.display()
+        )));
+    }
+    save_skill(workspace_root, scope, name, description, instructions)
+}
+
 /// Write `<dir>/SKILL.md`, keeping the frontmatter keys this harness doesn't
 /// interpret. The write is atomic (temp file + rename): it runs on every
 /// pause in typing, and a crash mid-write mustn't truncate the skill.
@@ -437,6 +461,26 @@ mod tests {
         let skills = load_skills_dir(&project_skills_dir(root), SkillScope::Project);
         assert_eq!(skills[0].description, "Two lines.");
         assert_eq!(skills[0].instructions, "Body.");
+    }
+
+    #[test]
+    fn an_autosave_never_recreates_a_skill_that_is_gone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        create_skill(root, SkillScope::Project, "deploy").unwrap();
+        update_skill(root, SkillScope::Project, "deploy", "Deploys.", "Run it.").unwrap();
+        let dir = scope_dir(root, SkillScope::Project).unwrap().join("deploy");
+        std::fs::remove_dir_all(&dir).unwrap();
+        let err = update_skill(
+            root,
+            SkillScope::Project,
+            "deploy",
+            "Deploys.",
+            "Run it again.",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no longer"), "{err}");
+        assert!(!dir.exists(), "the deleted skill came back");
     }
 
     #[test]

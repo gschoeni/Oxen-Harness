@@ -139,6 +139,33 @@ describe("Chat", () => {
     expect(document.querySelector(".msg.user .msg-user-text")?.textContent).toBe("/deploy staging");
   });
 
+  it("expands a skill sent without the menu from a fresh read, not the cached list", async () => {
+    const deploy = {
+      name: "deploy",
+      description: "Deploys the app.",
+      instructions: "1. Run the deploy script.",
+      scope: "project" as const,
+      dir: "/w/.oxen-harness/skills/deploy",
+      enabled: true,
+      draft: false,
+    };
+    render(<Chat />);
+    // Cold start (a prompt handed over by `oxen-harness ui "/deploy …"`):
+    // nothing cached yet, the skill is on disk.
+    useStore.setState({ skills: [] });
+    ipc.listSkills.mockResolvedValue([deploy]);
+    act(() => useStore.getState().send("/deploy now"));
+    await waitFor(() => expect(ipc.runTurn).toHaveBeenCalledTimes(1));
+    expect(String((ipc.runTurn.mock.calls[0] as unknown[])[1])).toContain("1. Run the deploy script.");
+
+    // Turned off since the list was cached: it no longer runs as a skill.
+    ipc.listSkills.mockResolvedValue([{ ...deploy, enabled: false }]);
+    useStore.setState({ skills: [deploy], runStatus: {} });
+    act(() => useStore.getState().send("/deploy again"));
+    await waitFor(() => expect(ipc.runTurn).toHaveBeenCalledTimes(2));
+    expect((ipc.runTurn.mock.calls[1] as unknown[])[1]).toBe("/deploy again");
+  });
+
   it("shows the empty state with the hero game attract screen and example prompts", () => {
     render(<Chat />);
     expect(screen.getByText("OXEN TRAIL")).toBeInTheDocument();

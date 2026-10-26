@@ -172,12 +172,34 @@ fn import_markdown(
     scope: SkillScope,
     src: &Path,
 ) -> Result<String, RuntimeError> {
+    let size = std::fs::metadata(src)
+        .map_err(|e| read_error(src, e))?
+        .len();
+    if size > MAX_IMPORT_BYTES {
+        return Err(RuntimeError::Invalid(format!(
+            "{} is {} MB; a skill can be at most {} MB.",
+            src.display(),
+            size / (1024 * 1024),
+            MAX_IMPORT_BYTES / (1024 * 1024)
+        )));
+    }
     let contents = std::fs::read_to_string(src).map_err(|e| read_error(src, e))?;
     let name = skill_name(&contents, &fallback_name(src, None), scope)?;
     let dest = vacant_skill_dir(workspace_root, scope, &name)?;
     std::fs::create_dir_all(&dest).map_err(io_context("creating", &dest))?;
     let md = dest.join("SKILL.md");
-    std::fs::write(&md, contents).map_err(io_context("writing", &md))?;
+    if let Err(e) = std::fs::write(&md, contents) {
+        // An empty folder would be invisible yet block every later import
+        // of this name.
+        if let Err(cleanup) = std::fs::remove_dir_all(&dest) {
+            return Err(RuntimeError::Invalid(format!(
+                "writing {}: {e}; and could not remove the half-made {}: {cleanup}",
+                md.display(),
+                dest.display()
+            )));
+        }
+        return Err(io_context("writing", &md)(e));
+    }
     Ok(name)
 }
 

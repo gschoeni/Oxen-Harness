@@ -1711,6 +1711,13 @@ fn coerce(model: &MediaModel, name: &str, value: Value) -> Result<Value, ToolErr
             _ if takes("boolean") => Value::Bool(matches!(s.trim(), "true" | "yes" | "on")),
             _ => value,
         },
+        // A number spelled as a string in a union with integer ("45" for
+        // seconds-or-"auto") is still a number: send it as one, and let the
+        // range below hold it. Words ("auto") stay as they are.
+        Value::String(s) if takes("integer") => match parsed(s) {
+            Some(f) => Value::from(f.round() as i64),
+            None => value,
+        },
         _ => value,
     };
     if let Some(choices) = prop.get("enum").and_then(Value::as_array) {
@@ -2526,6 +2533,17 @@ mod tests {
             ..video_request("seedance-ref", "x")
         };
         let err = prepare(&ctx, &cat, &req).unwrap_err();
+        assert!(err.to_string().contains("≤ 30"), "{err}");
+
+        // A number spelled as a string is a number: converted, and held to
+        // the same range.
+        let with = |v: Value| GenerateRequest {
+            extra: Map::from_iter([("duration".to_string(), v)]),
+            ..video_request("seedance-ref", "x")
+        };
+        let p = prepare(&ctx, &cat, &with(json!("6"))).unwrap();
+        assert_eq!(p.body["duration"], json!(6));
+        let err = prepare(&ctx, &cat, &with(json!("45"))).unwrap_err();
         assert!(err.to_string().contains("≤ 30"), "{err}");
     }
 

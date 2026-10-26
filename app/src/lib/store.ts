@@ -89,7 +89,7 @@ import { openThreadIds, threadsFromState } from "../features/threads/threads";
 import { partialCanvasDoc } from "./streamingArgs";
 import { nextSpeed, type SpeedState } from "./speed";
 import { withSnippetContext } from "./snippets";
-import { withSkillInstructions } from "./skillCommand";
+import { looksLikeSkillCommand, withSkillInstructions } from "./skillCommand";
 import { getUi, setUi } from "./uiState";
 import {
   movedTab,
@@ -1946,28 +1946,41 @@ export const useStore = create<AppState>((rawSet, get) => {
     send: (text, attachments = []) => {
       const id = get().session?.session_id;
       if (!id) return;
-      // Bake staged code snippets into the prompt now (not at turn time), so a
-      // queued prompt carries exactly the context that was on screen when it
-      // was written, and the chips clear the moment they're consumed.
-      // A `/<skill>` prompt carries the skill's instructions (see skillCommand).
-      text = withSkillInstructions(text, get().skills);
+      // Take staged code snippets now (not at turn time), so a queued prompt
+      // carries exactly the context that was on screen when it was written,
+      // and the chips clear the moment they're consumed.
       const staged = get().snippets[id] ?? [];
-      if (staged.length) {
-        text = withSnippetContext(text, staged);
-        set((s) => ({ snippets: { ...s.snippets, [id]: [] } }));
-      }
-      if (get().runStatus[id] === "running") {
-        const prompt = { text, attachments };
-        set((s) => {
-          const q = s.queues[id] ?? [];
-          // Bounded backstop: once the queue is saturated, ignore further sends
-          // rather than letting it grow unbounded in memory.
-          if (q.length >= MAX_QUEUE) return {};
-          return { queues: { ...s.queues, [id]: [...q, prompt] } };
-        });
-        return;
-      }
-      runTurnFor(id, text, attachments);
+      if (staged.length) set((s) => ({ snippets: { ...s.snippets, [id]: [] } }));
+      const deliver = (skills: SkillInfo[]) => {
+        // A `/<skill>` prompt carries the skill's instructions (see skillCommand).
+        let full = withSkillInstructions(text, skills);
+        if (staged.length) full = withSnippetContext(full, staged);
+        if (get().runStatus[id] === "running") {
+          const prompt = { text: full, attachments };
+          set((s) => {
+            const q = s.queues[id] ?? [];
+            // Bounded backstop: once the queue is saturated, ignore further sends
+            // rather than letting it grow unbounded in memory.
+            if (q.length >= MAX_QUEUE) return {};
+            return { queues: { ...s.queues, [id]: [...q, prompt] } };
+          });
+          return;
+        }
+        runTurnFor(id, full, attachments);
+      };
+      // The cached skills are only as new as the last time the slash menu
+      // opened, and empty on a cold start (a prompt handed over by
+      // `oxen-harness ui "/pdf …"`): a `/<name>` is expanded from a fresh
+      // read, so a skill can't go out unexpanded, or one just turned off
+      // still run. Unreadable right now: the last list is the best there is.
+      if (!looksLikeSkillCommand(text)) return deliver(get().skills);
+      void listSkills()
+        .then((skills) => {
+          set({ skills });
+          return skills;
+        })
+        .catch(() => get().skills)
+        .then(deliver);
     },
 
     stop: () => {

@@ -62,7 +62,8 @@ pub(crate) async fn rename_skill(
     .await
 }
 
-/// Create or update a skill's SKILL.md. Takes effect for new/resumed chats.
+/// Autosave an existing skill's SKILL.md (refused once the skill is gone; new
+/// skills start with `create_skill`). Takes effect for new/resumed chats.
 #[tauri::command]
 pub(crate) async fn save_skill(
     state: State<'_, AppState>,
@@ -73,7 +74,7 @@ pub(crate) async fn save_skill(
 ) -> Result<(), String> {
     let root = state.active_root().await;
     blocking("saving skill", move || {
-        harness_runtime::skills::save_skill(&root, scope, &name, &description, &instructions)
+        harness_runtime::skills::update_skill(&root, scope, &name, &description, &instructions)
     })
     .await
 }
