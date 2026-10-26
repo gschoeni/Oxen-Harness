@@ -94,6 +94,14 @@ button.gallery-inflight:hover {
   min-width: 340px;
   max-height: 440px;
 }
+/* Anchored at the right edge of a card, the menu opens leftward. */
+.media-dest-change .media-dest-menu {
+  left: auto;
+  right: 0;
+}
+.media-dest-change {
+  flex: none;
+}
 .media-dest-namespaces {
   flex: none;
   display: flex;

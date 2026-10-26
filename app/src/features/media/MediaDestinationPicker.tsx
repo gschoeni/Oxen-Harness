@@ -39,7 +39,16 @@ function kindLabel(ns: MediaNamespace): string {
   return "shared";
 }
 
-export function MediaDestinationPicker({ root }: { root: string }) {
+/** `trigger`: `label` names the repository on the button (the Gallery
+ *  header); `change` is a plain "Change" button for a surface that already
+ *  shows the name (Settings → Connection). */
+export function MediaDestinationPicker({
+  root,
+  trigger = "label",
+}: {
+  root: string;
+  trigger?: "label" | "change";
+}) {
   const destination = useStore((s) => s.mediaDestinations[root]);
   const refresh = useStore((s) => s.refreshMediaDestination);
   const choose = useStore((s) => s.chooseMediaDestination);
@@ -108,11 +117,11 @@ export function MediaDestinationPicker({ root }: { root: string }) {
   const label = current ?? "your playground";
 
   return (
-    <div className="picker media-dest" ref={ref}>
+    <div className={`picker media-dest media-dest-${trigger}`} ref={ref}>
       <Button
         type="button"
         size="sm"
-        variant="ghost"
+        variant={trigger === "change" ? "outline" : "ghost"}
         className="picker-btn media-dest-btn"
         onClick={() => setOpen((o) => !o)}
         disabled={busy}
@@ -121,8 +130,8 @@ export function MediaDestinationPicker({ root }: { root: string }) {
         aria-expanded={open}
         aria-label={`Repository: ${label}`}
       >
-        <CloudUpload size={13} aria-hidden="true" />
-        <span className="picker-label">{label}</span>
+        {trigger === "label" && <CloudUpload size={13} aria-hidden="true" />}
+        <span className="picker-label">{trigger === "change" ? "Change" : label}</span>
         <ChevronDown size={13} className="picker-caret" />
       </Button>
 

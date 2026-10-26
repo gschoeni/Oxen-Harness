@@ -242,9 +242,16 @@ function ConnectionSettings() {
   }
 
   return (
-    <div className="settings-page">
+    <div className="settings-page connection-page">
       <section className="settings-section">
-        <div className="settings-label">Oxen connection</div>
+        <div className="settings-section-head">
+          <h3 className="settings-heading">Oxen connection</h3>
+          <p className="settings-blurb">
+            The endpoint and keys every chat uses. Leave a field blank to fall back to your{" "}
+            <code>OXEN_*</code> / <code>BRAVE_API_KEY</code> environment or <code>oxen</code> CLI
+            login.
+          </p>
+        </div>
         <div className="fields">
           <label className="field">
             <span className="field-name">Host</span>
@@ -283,12 +290,12 @@ function ConnectionSettings() {
             </div>
           </label>
           <label className="field">
-            <span className="field-name">Brave Search API key</span>
+            <span className="field-name">Brave Search API key · optional</span>
             <div className="field-with-action">
               <input
                 className="field-input"
                 type={revealBrave ? "text" : "password"}
-                placeholder="Enables web_search — get one at brave.com/search/api"
+                placeholder="Enables web search — get one at brave.com/search/api"
                 value={braveKey}
                 spellCheck={false}
                 autoCapitalize="off"
@@ -311,35 +318,32 @@ function ConnectionSettings() {
           <Button variant="primary" size="sm" onClick={save} disabled={saving || !loaded}>
             {saving ? "Saving…" : "Save connection"}
           </Button>
-          {status && (
+          {status ? (
             <span className={`save-status ${status.ok ? "ok" : "err"}`}>
               {status.ok && <Check size={15} />}
               {status.msg}
             </span>
+          ) : (
+            <span className="hint">Saving starts a new chat.</span>
           )}
         </div>
-        <p className="hint">
-          Point the agent at a different Oxen endpoint, paste an API key, or add a Brave
-          Search key to enable web search. Leave a field blank to fall back to your{" "}
-          <code>OXEN_*</code> / <code>BRAVE_API_KEY</code> environment or <code>oxen</code> CLI
-          login. Saving starts a new chat.
-        </p>
       </section>
 
       <ProjectRepositorySection />
 
       <section className="settings-section">
-        <div className="settings-label">Current session</div>
+        <div className="settings-section-head">
+          <h3 className="settings-heading">Current session</h3>
+          <p className="settings-blurb">
+            The agent works inside this workspace: it reads, writes, and searches files and runs
+            commands there. Choose which tools it may call on the <strong>Tools</strong> page.
+          </p>
+        </div>
         <div className="meta">
           <Row label="model" value={session?.model ?? "—"} />
           <Row label="workspace" value={session?.workspace ?? "—"} title={session?.workspace} />
           <Row label="session" value={session ? session.session_id.slice(0, 8) : "—"} />
         </div>
-        <p className="hint">
-          The agent can read, write, and search files, run shell commands, and use git —
-          scoped to the workspace above. Manage exactly which tools it may call on the{" "}
-          <strong>Tools</strong> page.
-        </p>
       </section>
     </div>
   );

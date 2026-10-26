@@ -46,7 +46,8 @@ describe("Settings", () => {
     await user.click(await screen.findByRole("button", { name: "Repository: me/playground" }));
     await user.click(await screen.findByRole("option", { name: /sketches/ }));
     expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w/demo", "me/sketches");
-    expect(await screen.findByText("picked for this project")).toBeInTheDocument();
+    expect(await screen.findByText("Chosen for this project")).toBeInTheDocument();
+    expect(section).toHaveTextContent("me/sketches");
   });
 
   it("keeps the review step prompts out of the rail unless advanced settings are on", async () => {
