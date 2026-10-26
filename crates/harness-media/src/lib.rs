@@ -334,6 +334,12 @@ pub fn session_tools(
 /// catalog for one hub (a local dev hub and hub.oxen.ai serve different
 /// catalogs). Regenerable, so it lives under `cache/`.
 pub fn catalog_cache_path(base_url: &str) -> Option<PathBuf> {
+    // Unit tests run against mock hubs on random ports; caching them would
+    // litter the developer's real `~/.oxen-harness/cache` with one file per
+    // run. Tests that exercise the cache pass their own path.
+    if cfg!(test) {
+        return None;
+    }
     let host: String = base_url
         .trim()
         .trim_start_matches("https://")

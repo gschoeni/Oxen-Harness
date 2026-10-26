@@ -75,7 +75,8 @@ pub(crate) fn card_input(ui: &Ui, spec: &CardInputSpec) -> io::Result<CardInput>
     let mut value = spec.initial.to_string();
     let mut prev_lines = 0usize;
     let entered = loop {
-        let lines = render_card(ui, spec, &value);
+        let width = terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
+        let lines = render_card(ui, spec, &value, width);
         prev_lines = draw_block(&mut out, &lines, prev_lines)?;
 
         match event::read()? {
@@ -144,9 +145,8 @@ impl Drop for InputGuard {
 }
 
 /// The input card: title, helper lines, the (possibly bullet-masked) input row
-/// with a caret, and the key hints.
-fn render_card(ui: &Ui, spec: &CardInputSpec, value: &str) -> Vec<String> {
-    let width = terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
+/// with a caret, and the key hints, laid out for a `width`-column terminal.
+fn render_card(ui: &Ui, spec: &CardInputSpec, value: &str, width: usize) -> Vec<String> {
     let (top, bottom) = card_rules(ui, spec.header, width);
     let bar = ui.accent("│");
     // Cap the echoed row so a long value never wraps it (soft-wrap breaks the
@@ -194,7 +194,7 @@ mod tests {
     fn masked_card_shows_bullets_and_never_the_value() {
         let ui = Ui::plain();
         let help = vec!["Get one at https://hub.oxen.ai/settings".to_string()];
-        let lines = render_card(&ui, &spec(&help, true), "sk-abc");
+        let lines = render_card(&ui, &spec(&help, true), "sk-abc", 80);
         let joined = lines.join("\n");
         assert!(joined.contains("hub.oxen.ai"));
         assert!(joined.contains("••••••"));
@@ -205,10 +205,10 @@ mod tests {
     #[test]
     fn plain_card_echoes_the_value_and_windows_a_long_one() {
         let ui = Ui::plain();
-        let lines = render_card(&ui, &spec(&[], false), "hello");
+        let lines = render_card(&ui, &spec(&[], false), "hello", 80);
         assert!(lines.join("\n").contains("hello"));
         let long = "x".repeat(500);
-        let lines = render_card(&ui, &spec(&[], false), &long);
+        let lines = render_card(&ui, &spec(&[], false), &long, 80);
         for line in &lines {
             assert!(
                 line.chars().count() <= 80,

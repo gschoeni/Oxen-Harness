@@ -46,7 +46,7 @@ impl ScreenSuspension {
         let mut w = out.clone();
         let _ = write!(w, "{}", suspend_sequence(region_bottom, rows));
         let _ = w.flush();
-        let _ = crossterm::terminal::disable_raw_mode();
+        out.set_raw_mode(false);
         Self {
             paused: paused.clone(),
             out,
@@ -62,14 +62,14 @@ impl ScreenSuspension {
     /// tool's output — at the probed row when it answered.
     pub(super) fn reclaim(mut self, probe: impl FnOnce() -> Option<u16>) -> Option<u16> {
         self.reclaimed = true;
-        let _ = crossterm::terminal::enable_raw_mode();
+        self.out.set_raw_mode(true);
         let row = probe();
         self.resume();
         row
     }
 
     fn restore(&mut self) {
-        let _ = crossterm::terminal::enable_raw_mode();
+        self.out.set_raw_mode(true);
         self.resume();
     }
 

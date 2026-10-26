@@ -421,6 +421,11 @@ fn hex(bytes: &[u8]) -> String {
 
 /// `~/.oxen-harness/cache/media-uploads-<host>.json`.
 pub fn upload_cache_path(api_root: &str) -> Option<PathBuf> {
+    // See `catalog_cache_path`: mock hubs in unit tests must not write the
+    // real cache.
+    if cfg!(test) {
+        return None;
+    }
     let host: String = api_root
         .trim()
         .trim_start_matches("https://")

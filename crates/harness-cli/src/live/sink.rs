@@ -59,6 +59,29 @@ impl Sink {
     }
 }
 
+impl Sink {
+    /// Enter or leave raw mode on the terminal behind this sink. A capture
+    /// has no terminal: leaving it alone keeps tests from calling
+    /// `tcsetattr`, which stops a test binary run as a background job
+    /// (SIGTTOU) until someone foregrounds it.
+    pub(super) fn set_raw_mode(&self, on: bool) {
+        match &self.0 {
+            SinkInner::Stdout => {
+                // Best effort: a terminal that refuses raw mode still gets
+                // the layout's escape sequences, and there is no caller to
+                // report to mid-hand-off.
+                let _ = if on {
+                    crossterm::terminal::enable_raw_mode()
+                } else {
+                    crossterm::terminal::disable_raw_mode()
+                };
+            }
+            #[cfg(test)]
+            SinkInner::Capture { .. } => {}
+        }
+    }
+}
+
 impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match &self.0 {
