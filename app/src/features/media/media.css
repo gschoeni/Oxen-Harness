@@ -44,11 +44,17 @@ button.gallery-inflight:hover {
   color: var(--text-secondary);
   font-size: var(--text-xs);
 }
+/* A narrow panel wraps whole chips onto another row rather than squeezing
+   each chip's label onto two lines. */
 .gallery-filters {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: var(--space-1);
+  min-width: 0;
 }
 .gallery-chip {
+  flex: none;
+  white-space: nowrap;
   padding: 1px 9px;
   font-size: var(--text-xs);
   border-radius: var(--radius-pill);
