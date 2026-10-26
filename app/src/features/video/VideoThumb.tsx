@@ -30,7 +30,10 @@ export function VideoThumb({
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
-  const [failed, setFailed] = useState(false);
+  // Tied to the source, so a rewritten file (a new cache-buster) gets
+  // another try.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const failed = failedSrc === src;
   const classes = ["video-still", playing && "playing", className].filter(Boolean).join(" ");
   if (failed) {
     return (
@@ -57,7 +60,7 @@ export function VideoThumb({
         draggable={false}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
-        onError={() => setFailed(true)}
+        onError={() => setFailedSrc(src)}
       />
       <span className="video-still-play" aria-hidden="true">
         <Play />

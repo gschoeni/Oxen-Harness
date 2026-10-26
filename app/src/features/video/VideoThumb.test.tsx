@@ -61,6 +61,13 @@ describe("VideoThumb", () => {
     expect(container.querySelector("video")).toBeNull();
     expect(screen.getByRole("img", { name: "clip" }).classList.contains("failed")).toBe(true);
   });
+
+  it("tries again when the source changes after a failure", () => {
+    const { container, rerender } = render(<VideoThumb src={SRC} label="clip" />);
+    fireEvent.error(screen.getByLabelText("clip"));
+    rerender(<VideoThumb src={`${SRC}?v=1`} label="clip" />);
+    expect(container.querySelector("video")?.getAttribute("src")).toBe(`${SRC}?v=1#t=0.1`);
+  });
 });
 
 describe("InlineVideo", () => {
