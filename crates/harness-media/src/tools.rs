@@ -1142,7 +1142,7 @@ fn prepare(
             continue;
         }
         if let Some(slot) = model.media_field(name) {
-            let (field, files) = media_field(ctx, &model, slot, value)?;
+            let (field, files) = read_media_field(ctx, &model, slot, value)?;
             for r in files {
                 if !resolved.iter().any(|known| known.path == r.path) {
                     resolved.push(r);
@@ -1192,7 +1192,7 @@ fn prepare(
 /// Read a media field from `extra`: hosted URIs pass through, anything else
 /// resolves as a reference (label or project path) and is checked against
 /// the kind the field's name says it takes.
-fn media_field(
+fn read_media_field(
     ctx: &MediaContext,
     model: &MediaModel,
     slot: crate::catalog::Slot,
