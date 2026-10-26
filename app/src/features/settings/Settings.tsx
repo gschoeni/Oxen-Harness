@@ -233,6 +233,8 @@ function ConnectionSettings() {
       const info = await setConnection(host.trim(), apiKey.trim(), braveKey.trim());
       adoptSession(info);
       refreshHistory();
+      // A different key or host can write to different repositories.
+      useStore.setState({ mediaNamespaces: null });
       setStatus({ ok: true, msg: "Saved — started a fresh chat on the new settings." });
     } catch (e) {
       setStatus({ ok: false, msg: String(e) });

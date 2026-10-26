@@ -1,26 +1,27 @@
 // Settings → Connection's project-scoped block: the Oxen repository the open
 // project's assets go to on the hub (today its generated images and videos).
-// Same picker and same setting as the Gallery's "Saving to" and
-// `/repository`; this is the place to find it without going looking.
+// Same setting as the Gallery's "Saving to" and `/repository`; here "Change"
+// opens the full two-column browser inline, beneath the card.
 
-import { CloudUpload, ExternalLink, FolderOpen } from "lucide-react";
-import { IconButton } from "../../components/ui";
+import { useEffect, useState } from "react";
+import { ChevronDown, ChevronUp, CloudUpload, ExternalLink, FolderOpen, RotateCcw } from "lucide-react";
+import { Button, IconButton } from "../../components/ui";
 import { openExternal } from "../../lib/ipc";
 import { useActiveProject, useStore } from "../../lib/store";
-import type { MediaDestination } from "../../lib/types";
-import { MediaDestinationPicker } from "../media/MediaDestinationPicker";
-
-/** Where the repository in effect came from, said in full. */
-const ORIGIN: Record<MediaDestination["source"], string> = {
-  project: "Chosen for this project",
-  project_remote: "From the project's remote repository (project page)",
-  global: "The default from Settings → Media",
-  hub_default: "Oxen's default — your account's playground",
-};
+import { SOURCE_LABEL } from "../media/MediaDestinationPicker";
+import { RepositoryBrowser } from "../media/RepositoryBrowser";
 
 export function ProjectRepositorySection() {
   const project = useActiveProject();
   const destination = useStore((s) => (project ? s.mediaDestinations[project.path] : undefined));
+  const refresh = useStore((s) => s.refreshMediaDestination);
+  const choose = useStore((s) => s.chooseMediaDestination);
+  const [browsing, setBrowsing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (project) void refresh(project.path);
+  }, [project?.path, refresh]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <section className="settings-section" aria-label="Project repository">
@@ -41,15 +42,29 @@ export function ProjectRepositorySection() {
         </p>
       </div>
       {project && (
-        <>
+        <div className={`project-repository ${browsing ? "browsing" : ""}`}>
           <div className="project-repository-card">
             <CloudUpload size={18} className="project-repository-icon" aria-hidden="true" />
             <div className="project-repository-text">
               <span className="project-repository-name">{destination?.repo ?? "Your playground"}</span>
               <span className="project-repository-origin">
-                {destination ? ORIGIN[destination.source] : "Looking it up…"}
+                {destination ? SOURCE_LABEL[destination.source] : "Looking it up…"}
               </span>
             </div>
+            {destination?.source === "project" && !browsing && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                title="Go back to the project remote, the Settings → Media default, or your playground"
+                onClick={() => {
+                  setError(null);
+                  choose(project.path, null).catch((e) => setError(String(e)));
+                }}
+              >
+                <RotateCcw size={13} /> Use default
+              </Button>
+            )}
             {destination?.web_url && (
               <IconButton
                 aria-label="Open the repository on Oxen.ai"
@@ -59,13 +74,37 @@ export function ProjectRepositorySection() {
                 <ExternalLink size={15} />
               </IconButton>
             )}
-            <MediaDestinationPicker root={project.path} trigger="change" />
+            <Button
+              type="button"
+              size="sm"
+              variant={browsing ? "ghost" : "outline"}
+              aria-expanded={browsing}
+              onClick={() => setBrowsing((b) => !b)}
+            >
+              {browsing ? "Done" : "Change"}
+              {browsing ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </Button>
           </div>
-          <p className="hint">
-            Pick any repository you can write to, or type a new name in your own namespace or an
-            organization you edit — it's created on first use. In a chat: <code>/repository</code>.
-          </p>
-        </>
+          {browsing && (
+            <RepositoryBrowser
+              root={project.path}
+              current={destination?.repo ?? null}
+              layout="columns"
+              onDone={() => setBrowsing(false)}
+            />
+          )}
+        </div>
+      )}
+      {error && (
+        <div className="repo-browser-error" role="alert">
+          {error}
+        </div>
+      )}
+      {project && !browsing && (
+        <p className="hint">
+          Pick any repository you can write to, or name a new one in your own namespace or an
+          organization you edit — it's created on first use. In a chat: <code>/repository</code>.
+        </p>
       )}
     </section>
   );

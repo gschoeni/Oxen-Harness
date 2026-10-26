@@ -60,6 +60,7 @@ import {
   useLocalModel,
   listMedia,
   mediaDestination as fetchMediaDestination,
+  listMediaNamespaces,
   setMediaDestination,
   cancelMedia as cancelMediaIpc,
   getMediaPrefs,
@@ -152,6 +153,7 @@ import type {
   MediaChangedEvent,
   MediaDestination,
   MediaItem,
+  MediaNamespace,
   MediaUpload,
   MediaPrefs,
   SkillInfo,
@@ -594,6 +596,8 @@ interface AppState {
   galleryRenderingFocus: boolean;
   /** Where each project's generations go on the hub, keyed by root. */
   mediaDestinations: Record<string, MediaDestination | undefined>;
+  /** What the API key can send assets to; null until first listed. */
+  mediaNamespaces: MediaNamespace[] | null;
   /** Files another surface (the Gallery's "Use as reference") staged for the
    *  composer; Chat drains them into its attachment list. Absolute paths. */
   pendingAttachments: string[];
@@ -839,6 +843,9 @@ interface AppState {
   openRendering: () => void;
   /** Consume the Gallery's focus request. */
   clearMediaFocus: () => void;
+  /** List the namespaces and repositories the key can write to, once per
+   *  app run unless `force`d. Rejects with the hub's reason. */
+  loadMediaNamespaces: (force?: boolean) => Promise<MediaNamespace[]>;
   /** Re-read where a project's generations go. */
   refreshMediaDestination: (root: string) => Promise<void>;
   /** Send a project's generations to `repo` (`namespace/name`), or with
@@ -1422,6 +1429,7 @@ export const useStore = create<AppState>((rawSet, get) => {
     mediaFocus: null,
     galleryRenderingFocus: false,
     mediaDestinations: {},
+    mediaNamespaces: null,
     pendingAttachments: [],
     inspectorLive: false,
     agentView: {},
@@ -2237,6 +2245,14 @@ export const useStore = create<AppState>((rawSet, get) => {
     },
 
     clearMediaFocus: () => set({ mediaFocus: null, galleryRenderingFocus: false }),
+
+    loadMediaNamespaces: async (force = false) => {
+      const cached = get().mediaNamespaces;
+      if (cached && !force) return cached;
+      const namespaces = await listMediaNamespaces();
+      set({ mediaNamespaces: namespaces });
+      return namespaces;
+    },
 
     refreshMediaDestination: async (root) => {
       try {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -22,50 +22,69 @@ async function openPicker() {
   render(<MediaDestinationPicker root="/w" />);
   await user.click(await screen.findByRole("button", { name: "Repository: me/playground" }));
   // The namespaces arrive, the current one selected.
-  expect(await screen.findByRole("button", { name: /^me/, pressed: true })).toBeInTheDocument();
+  expect(await screen.findByRole("combobox", { name: "Namespace" })).toHaveValue("me");
   return user;
 }
 
-describe("MediaDestinationPicker", () => {
-  it("shows where generations go and switches to a listed repository", async () => {
-    const user = await openPicker();
-    expect(ipc.mediaDestination).toHaveBeenCalledWith("/w");
-    expect(screen.getByRole("option", { name: /playground/ })).toHaveAttribute("aria-selected", "true");
+const repos = () => within(screen.getByRole("listbox", { name: "Repositories" }));
 
-    await user.click(screen.getByRole("button", { name: /^Studio/ }));
-    await user.click(screen.getByRole("option", { name: /shots/ }));
+describe("MediaDestinationPicker", () => {
+  it("lists the current namespace's repositories and switches to one", async () => {
+    const user = await openPicker();
+    expect(repos().getByRole("option", { name: /playground/ })).toHaveAttribute("aria-selected", "true");
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Namespace" }), "Studio");
+    await user.click(repos().getByRole("option", { name: /shots/ }));
     expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w", "Studio/shots");
-    // Closed, and the trigger names the new home.
     expect(await screen.findByRole("button", { name: "Repository: Studio/shots" })).toBeInTheDocument();
-    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("searches every namespace at once, and Enter takes the highlighted row", async () => {
+    const user = await openPicker();
+    await user.type(screen.getByRole("searchbox", { name: "Search repositories" }), "play");
+    const names = repos()
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    // Matches from every namespace, then the typed name as a new repository.
+    expect(names).toEqual(["me/playground in use", "ox/playground", " Create me/playcreated on first use"]);
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w", "ox/playground");
   });
 
   it("offers a new name only where the hub will create it", async () => {
     const user = await openPicker();
-    const filter = screen.getByRole("searchbox", { name: "Filter repositories" });
-    await user.type(filter, "moodboard");
-    expect(screen.getByRole("option", { name: /Create me\/moodboard/ })).toBeInTheDocument();
+    const namespace = screen.getByRole("combobox", { name: "Namespace" });
+    await user.selectOptions(namespace, "ox");
+    await user.type(screen.getByRole("searchbox", { name: "Search repositories" }), "moodboard");
+    expect(repos().queryByRole("option", { name: /Create/ })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /^ox/ }));
-    expect(screen.queryByRole("option", { name: /Create/ })).not.toBeInTheDocument();
-    expect(screen.getByText("No matching repositories.")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /^me/ }));
-    await user.click(filter);
-    await user.keyboard("{Enter}");
+    await user.selectOptions(namespace, "me");
+    await user.type(screen.getByRole("searchbox", { name: "Search repositories" }), "moodboard");
+    await user.click(repos().getByRole("option", { name: /Create me\/moodboard/ }));
     expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w", "me/moodboard");
   });
 
-  it("keeps the menu open with the hub's reason when a choice is refused", async () => {
+  it("keeps the picker open with the hub's reason when a choice is refused", async () => {
     ipc.setMediaDestination.mockRejectedValueOnce(
       "you can't write to `ox/public` (your access: viewer); it needs the admin or editor role",
     );
     const user = await openPicker();
-    await user.type(screen.getByRole("searchbox", { name: "Filter repositories" }), "ox/public");
-    await user.click(screen.getByRole("option", { name: /Use ox\/public/ }));
+    await user.type(screen.getByRole("searchbox", { name: "Search repositories" }), "ox/public");
+    await user.click(repos().getByRole("option", { name: /Use ox\/public/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("your access: viewer");
-    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Repository: me/playground" })).toBeInTheDocument();
+  });
+
+  it("lists the hub once per run, and refresh asks again", async () => {
+    const user = await openPicker();
+    await user.click(screen.getByRole("button", { name: "Repository: me/playground" }));
+    await user.click(screen.getByRole("button", { name: "Repository: me/playground" }));
+    await screen.findByRole("combobox", { name: "Namespace" });
+    expect(ipc.listMediaNamespaces).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Refresh the list from Oxen.ai" }));
+    expect(ipc.listMediaNamespaces).toHaveBeenCalledTimes(2);
   });
 
   it("a project's own choice can be dropped back to the default", async () => {
@@ -77,7 +96,7 @@ describe("MediaDestinationPicker", () => {
     const user = userEvent.setup();
     render(<MediaDestinationPicker root="/w" />);
     await user.click(await screen.findByRole("button", { name: "Repository: Studio/shots" }));
-    await user.click(await screen.findByRole("option", { name: /Use the default/ }));
+    await user.click(screen.getByRole("button", { name: /Use the default/ }));
     expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w", null);
   });
 });

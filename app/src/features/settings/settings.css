@@ -1101,15 +1101,27 @@
 }
 /* The repository in effect: name first, where it came from beneath, and
    the actions at the right edge. */
+/* The card and, while changing it, the browser beneath share one frame. */
+.project-repository {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+}
+.project-repository.browsing {
+  border-color: var(--separator-strong);
+}
+.project-repository > .repo-browser {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--separator);
+}
 .project-repository-card {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
   padding: var(--space-3) var(--space-4);
-  background: var(--bg);
-  border: 1px solid var(--separator);
-  border-radius: var(--radius);
 }
 .project-repository-icon {
   flex: none;

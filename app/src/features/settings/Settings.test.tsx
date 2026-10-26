@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -43,11 +43,17 @@ describe("Settings", () => {
     const section = screen.getByRole("region", { name: "Project repository" });
     expect(section).toHaveTextContent("Demo");
     expect(ipc.mediaDestination).toHaveBeenCalledWith("/w/demo");
-    await user.click(await screen.findByRole("button", { name: "Repository: me/playground" }));
-    await user.click(await screen.findByRole("option", { name: /sketches/ }));
-    expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w/demo", "me/sketches");
-    expect(await screen.findByText("Chosen for this project")).toBeInTheDocument();
-    expect(section).toHaveTextContent("me/sketches");
+    expect(await within(section).findByText("me/playground")).toBeInTheDocument();
+    await user.click(within(section).getByRole("button", { name: /Change/ }));
+    // Namespaces sit beside the repositories, grouped by how you reach them.
+    const namespaces = await within(section).findByRole("navigation", { name: "Namespaces" });
+    expect(namespaces).toHaveTextContent(/Your account.*Organizations.*Shared with you/);
+    await user.click(within(namespaces).getByRole("button", { name: /Studio/ }));
+    await user.click(within(section).getByRole("option", { name: /shots/ }));
+    expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w/demo", "Studio/shots");
+    expect(await within(section).findByText("Chosen for this project")).toBeInTheDocument();
+    expect(within(section).getByText("Studio/shots")).toBeInTheDocument();
+    expect(within(section).queryByRole("navigation")).not.toBeInTheDocument();
   });
 
   it("keeps the review step prompts out of the rail unless advanced settings are on", async () => {
