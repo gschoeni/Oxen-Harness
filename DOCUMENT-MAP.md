@@ -251,5 +251,5 @@ When adding a new file to the project, update this document map.
 
 - `crates/harness-media/src/destination.rs` — what the API key can send generations to (`HubRepos::destinations`: own namespace, admin/editor orgs, shared repos) and `check_destination` (write access or a creatable namespace); `MediaContext::with_destination` re-reads the target per generation.
 - `crates/harness-runtime/src/media.rs` — `destination_for` (project media repo → project remote → global → hub default), `choose_destination` (hub check + save), `destination_resolver`.
-- `crates/harness-cli/src/commands/media_repo.rs` — `/media-repo`: show, namespace → repository picker, `ns/name` to switch, `clear`.
-- `app/src/features/media/MediaDestinationPicker.tsx` — the Gallery's "Saving to" picker; `/media-repo` in the desktop opens it or switches directly. Host: `media_destination`/`set_media_destination`/`media_namespaces` (Tauri commands, `/v1/media/destination`, `/v1/media/namespaces`).
+- `crates/harness-cli/src/commands/repository.rs` — `/repository` (`/repo`): show, namespace → repository picker, `ns/name` to switch, `clear`.
+- `app/src/features/media/MediaDestinationPicker.tsx` — the repository picker (Gallery's "Saving to", Settings → Connection); `app/src/features/settings/ProjectRepositorySection.tsx` is the project-scoped Connection section. Desktop `/repository` switches directly, or opens Settings → Connection. Host: `media_destination`/`set_media_destination`/`media_namespaces` (Tauri commands, `/v1/media/destination`, `/v1/media/namespaces`).

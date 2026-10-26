@@ -1,11 +1,11 @@
-//! `/media-repo` — see and switch where this project's generated images and
-//! videos go on the hub.
+//! `/repository` — see and switch the Oxen repository this project's assets
+//! go to on the hub (today: its generated images and videos).
 //!
-//! - `/media-repo` shows the destination, then picks a namespace and a
-//!   repository from what the API key can write to (typing `✎` a new name
-//!   works where the hub will create it).
-//! - `/media-repo <namespace/name>` checks it against the hub and switches.
-//! - `/media-repo clear` drops the project's choice, falling back to the
+//! - `/repository` shows it, then picks a namespace and a repository from
+//!   what the API key can write to (typing `✎` a new name works where the
+//!   hub will create it).
+//! - `/repository <namespace/name>` checks it against the hub and switches.
+//! - `/repository clear` drops the project's choice, falling back to the
 //!   project remote, the global default, or the account's `playground`.
 //!
 //! The switch reaches the open chat's next generation; see
@@ -67,7 +67,7 @@ async fn pick(root: &Path, api: Option<&harness_media::MediaApi>, ui: &Ui) -> Re
     );
     let Some(namespace) = first(picker::select(
         ui,
-        "Media repo",
+        "Repository",
         "Send this project's generations to which namespace? (or ✎ type namespace/name)",
         &options,
         false,
@@ -95,7 +95,7 @@ async fn pick(root: &Path, api: Option<&harness_media::MediaApi>, ui: &Ui) -> Re
     } else {
         format!("Which repository in {}?", ns.name)
     };
-    let Some(repo) = first(picker::select(ui, "Media repo", &question, &repos, false)?) else {
+    let Some(repo) = first(picker::select(ui, "Repository", &question, &repos, false)?) else {
         return Ok(());
     };
     let repo = repo.trim().trim_matches('/');

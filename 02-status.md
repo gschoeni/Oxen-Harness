@@ -7,8 +7,10 @@
 
 ## Media destination switching — 2026-10-25
 
-Each project picks the hub repository its generations go to, from the
-Gallery header ("Saving to ▾") or `/media-repo` in the CLI and desktop. The
+Each project picks the Oxen repository its assets (today: generations) go
+to, from Settings → Connection's project-scoped "Project repository"
+section, the Gallery header ("Saving to ▾"), or `/repository` (`/repo`) in
+the CLI and desktop. The
 picker lists the key's own namespace, organizations it can create repos in,
 and repositories shared with it; a choice is checked against the hub (write
 access, or a namespace where the hub will create it) before saving, and it

@@ -315,8 +315,8 @@ function HubRepoField({ value, onChange }: { value: string | null; onChange: (v:
       </label>
       <p className="hint">
         The default Oxen repo on the hub that stores each generation, under the output folder. Leave
-        empty for your account's playground. A project can pick its own from the Gallery or with
-        /media-repo.
+        empty for your account's playground. A project can pick its own in Settings → Connection
+        or with /repository.
       </p>
     </div>
   );

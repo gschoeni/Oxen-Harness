@@ -349,7 +349,7 @@ async fn handle_line(
         }
         Command::Tasks(rest) => commands::tasks::handle_repl(rest, ui).await,
         Command::Gallery(rest) => commands::gallery::handle_repl(rest, ui)?,
-        Command::MediaRepo(rest) => commands::media_repo::handle_repl(rest, ui).await?,
+        Command::Repository(rest) => commands::repository::handle_repl(rest, ui).await?,
         Command::Resume(rest) => commands::resume::handle_repl(rest, agent, ui, ctx).await?,
         Command::Fork => commands::rewind::fork_repl(agent, ui, ctx)?,
         Command::Rewind(rest) => commands::rewind::rewind_repl(rest, agent, ui, ctx)?,

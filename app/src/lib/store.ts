@@ -594,9 +594,6 @@ interface AppState {
   galleryRenderingFocus: boolean;
   /** Where each project's generations go on the hub, keyed by root. */
   mediaDestinations: Record<string, MediaDestination | undefined>;
-  /** Set when the Gallery should open its destination picker
-   *  (`/media-repo`); the picker clears it once open. */
-  mediaDestinationPick: boolean;
   /** Files another surface (the Gallery's "Use as reference") staged for the
    *  composer; Chat drains them into its attachment list. Absolute paths. */
   pendingAttachments: string[];
@@ -847,10 +844,6 @@ interface AppState {
   /** Send a project's generations to `repo` (`namespace/name`), or with
    *  null back to the default. Rejects with the hub's reason. */
   chooseMediaDestination: (root: string, repo: string | null) => Promise<MediaDestination>;
-  /** Open the Gallery with its destination picker showing. */
-  openMediaDestinationPicker: () => void;
-  /** The destination picker took the open request. */
-  clearMediaDestinationPick: () => void;
   /** Stage a file for the composer's next message (absolute path). */
   stageAttachment: (path: string) => void;
   /** The composer took the staged files. */
@@ -1429,7 +1422,6 @@ export const useStore = create<AppState>((rawSet, get) => {
     mediaFocus: null,
     galleryRenderingFocus: false,
     mediaDestinations: {},
-    mediaDestinationPick: false,
     pendingAttachments: [],
     inspectorLive: false,
     agentView: {},
@@ -2260,13 +2252,6 @@ export const useStore = create<AppState>((rawSet, get) => {
       set((s) => ({ mediaDestinations: { ...s.mediaDestinations, [root]: destination } }));
       return destination;
     },
-
-    openMediaDestinationPicker: () => {
-      get().openGallery();
-      set({ mediaDestinationPick: true });
-    },
-
-    clearMediaDestinationPick: () => set({ mediaDestinationPick: false }),
 
     revealInFiles: (path) => {
       get().setLeftTab("files");

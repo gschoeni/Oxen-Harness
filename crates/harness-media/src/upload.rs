@@ -200,7 +200,7 @@ impl HubUploader {
                 message: format!(
                     "could not find or create `{namespace}/{repo}` for this API key \
                      ({status}: {message}). Pick a repository this key can write to with \
-                     `/media-repo` or the gallery's \"Saving to\" picker."
+                     `/repository` or Settings → Connection."
                 ),
             }),
             Err(UploadError::Unauthorized) => Err(UploadError::Api {
@@ -208,7 +208,7 @@ impl HubUploader {
                 message: format!(
                     "this API key isn't allowed to create repositories, and no `{repo}` \
                      repository was found for it. Pick a repository this key can \
-                     write to with `/media-repo` or the gallery's \"Saving to\" picker."
+                     write to with `/repository` or Settings → Connection."
                 ),
             }),
             Err(e) => Err(e),
@@ -640,7 +640,7 @@ mod tests {
             None,
         );
         let err = uploader.target().await.unwrap_err();
-        assert!(err.to_string().contains("/media-repo"), "{err}");
+        assert!(err.to_string().contains("/repository"), "{err}");
     }
 
     #[tokio::test]

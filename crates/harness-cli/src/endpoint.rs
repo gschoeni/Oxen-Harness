@@ -286,7 +286,7 @@ pub(crate) fn build_tool_registry(workspace: &Workspace, ui: &Ui, base_url: &str
         crate::media::library(workspace.root()),
         Arc::new(harness_media::AskerSpendConfirm(asker.clone())),
     )
-    // `/media-repo` switches where the next generation goes.
+    // `/repository` switches where the next generation goes.
     .with_destination(harness_runtime::media::destination_resolver(
         workspace.root().to_path_buf(),
     ))

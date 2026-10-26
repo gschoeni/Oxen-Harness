@@ -21,6 +21,34 @@ beforeEach(() => {
 });
 
 describe("Settings", () => {
+  it("Connection names the open project and switches the repository its assets go to", async () => {
+    const user = userEvent.setup();
+    useStore.setState({
+      session: { ...ipc.sampleSession, workspace: "/w/demo" },
+      projects: [
+        {
+          path: "/w/demo",
+          name: "Demo",
+          description: "",
+          instructions: "",
+          context: [],
+          remote_repo: null,
+          session_count: 1,
+          active: true,
+          last_used_at: null,
+        },
+      ],
+    });
+    render(<Settings />);
+    const section = screen.getByRole("region", { name: "Project repository" });
+    expect(section).toHaveTextContent("Demo");
+    expect(ipc.mediaDestination).toHaveBeenCalledWith("/w/demo");
+    await user.click(await screen.findByRole("button", { name: "Repository: me/playground" }));
+    await user.click(await screen.findByRole("option", { name: /sketches/ }));
+    expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w/demo", "me/sketches");
+    expect(await screen.findByText("picked for this project")).toBeInTheDocument();
+  });
+
   it("keeps the review step prompts out of the rail unless advanced settings are on", async () => {
     await setFeatureFlags();
     // A stale request for the hidden page lands somewhere real.

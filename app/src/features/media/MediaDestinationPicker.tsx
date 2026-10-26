@@ -1,5 +1,6 @@
-// Where the project's generations go on the hub, shown in the Gallery's
-// header and switched from there (or with `/media-repo`). The popover lists
+// The Oxen repository the project's assets go to on the hub (today: its
+// generations), shown in the Gallery's header and in Settings → Connection,
+// and switched from either (or with `/repository`). The popover lists
 // what the API key can write to — its own namespace, organizations it may
 // create repos in, repos shared with it — as namespace chips over a
 // filterable repository list. A typed `namespace/name`, or a new name in a
@@ -14,8 +15,9 @@ import { Menu, MenuHead, MenuItem, MenuSep, useMenuState } from "../../component
 import { listMediaNamespaces, openExternal } from "../../lib/ipc";
 import { useStore } from "../../lib/store";
 import type { MediaDestination, MediaNamespace } from "../../lib/types";
+import "./media.css";
 
-const SOURCE_LABEL: Record<MediaDestination["source"], string> = {
+export const SOURCE_LABEL: Record<MediaDestination["source"], string> = {
   project: "picked for this project",
   project_remote: "the project's repository",
   global: "the default in Settings → Media",
@@ -41,8 +43,6 @@ export function MediaDestinationPicker({ root }: { root: string }) {
   const destination = useStore((s) => s.mediaDestinations[root]);
   const refresh = useStore((s) => s.refreshMediaDestination);
   const choose = useStore((s) => s.chooseMediaDestination);
-  const pick = useStore((s) => s.mediaDestinationPick);
-  const clearPick = useStore((s) => s.clearMediaDestinationPick);
   const { open, setOpen, ref } = useMenuState();
   const [namespaces, setNamespaces] = useState<MediaNamespace[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -53,13 +53,6 @@ export function MediaDestinationPicker({ root }: { root: string }) {
   useEffect(() => {
     void refresh(root);
   }, [root, refresh]);
-
-  // `/media-repo` asks for the menu (possibly before this panel mounted).
-  useEffect(() => {
-    if (!pick) return;
-    setOpen(true);
-    clearPick();
-  }, [pick, setOpen, clearPick]);
 
   useEffect(() => {
     if (!open) return;
@@ -123,10 +116,10 @@ export function MediaDestinationPicker({ root }: { root: string }) {
         className="picker-btn media-dest-btn"
         onClick={() => setOpen((o) => !o)}
         disabled={busy}
-        title={destination ? `Generations go to ${label} (${SOURCE_LABEL[destination.source]})` : "Where generations go on the hub"}
+        title={destination ? `This project's assets go to ${label} (${SOURCE_LABEL[destination.source]})` : "The Oxen repository this project's assets go to"}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`Hub repository: ${label}`}
+        aria-label={`Repository: ${label}`}
       >
         <CloudUpload size={13} aria-hidden="true" />
         <span className="picker-label">{label}</span>
@@ -135,7 +128,7 @@ export function MediaDestinationPicker({ root }: { root: string }) {
 
       {open && (
         <Menu className="picker-menu media-dest-menu">
-          <MenuHead aside={destination && SOURCE_LABEL[destination.source]}>Generations go to</MenuHead>
+          <MenuHead aside={destination && SOURCE_LABEL[destination.source]}>Project repository</MenuHead>
           <input
             autoFocus
             className="picker-search"

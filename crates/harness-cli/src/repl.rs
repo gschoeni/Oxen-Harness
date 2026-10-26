@@ -73,10 +73,11 @@ pub enum Command {
     /// over them (open one, or stage it as a reference chip); `/gallery
     /// open <n>` / `/gallery use <n>` skip the picker.
     Gallery(Option<String>),
-    /// Where this project's generations go on the hub: `/media-repo` shows
-    /// it and opens a namespace → repository picker; `/media-repo ns/name`
-    /// checks and switches; `/media-repo clear` drops the project's choice.
-    MediaRepo(Option<String>),
+    /// The Oxen repository this project's assets go to on the hub:
+    /// `/repository` shows it and opens a namespace → repository picker;
+    /// `/repository ns/name` checks and switches; `/repository clear` drops
+    /// the project's choice.
+    Repository(Option<String>),
     /// Pick up an earlier trail in this workspace: `/resume` opens a picker
     /// over the recent sessions, `/resume <id-prefix>` jumps straight to one.
     Resume(Option<String>),
@@ -316,10 +317,10 @@ pub(crate) const SLASH_COMMANDS: &[SlashSpec] = &[
         ]),
     },
     SlashSpec {
-        name: "/media-repo",
-        aliases: &["/hub-repo"],
-        description: "see or switch the hub repository generated media goes to",
-        build: Command::MediaRepo,
+        name: "/repository",
+        aliases: &["/repo"],
+        description: "see or switch the Oxen repository this project's assets go to",
+        build: Command::Repository,
         completer: ArgCompleter::Static(&[(
             "clear",
             "drop this project's choice and use the default",
@@ -462,15 +463,15 @@ mod tests {
     }
 
     #[test]
-    fn media_repo_keeps_its_argument() {
-        assert_eq!(parse_command("/media-repo"), Command::MediaRepo(None));
+    fn repository_keeps_its_argument() {
+        assert_eq!(parse_command("/repository"), Command::Repository(None));
         assert_eq!(
-            parse_command("/media-repo ox/art"),
-            Command::MediaRepo(Some("ox/art".into()))
+            parse_command("/repository ox/art"),
+            Command::Repository(Some("ox/art".into()))
         );
         assert_eq!(
-            parse_command("/hub-repo clear"),
-            Command::MediaRepo(Some("clear".into()))
+            parse_command("/repo clear"),
+            Command::Repository(Some("clear".into()))
         );
         // `/media` stays the gallery.
         assert_eq!(parse_command("/media"), Command::Gallery(None));

@@ -32,7 +32,8 @@ pub struct ProjectConfig {
     pub remote_repo: Option<String>,
     /// Where this project's generated media goes on the hub, as
     /// `namespace/name`, when it isn't the remote repository. Switched from
-    /// the gallery or `/media-repo`; see `media::destination_for`.
+    /// Settings → Connection, the gallery, or `/repository`; see
+    /// `media::destination_for`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_repo: Option<String>,
 }

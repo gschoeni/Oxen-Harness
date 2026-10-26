@@ -1702,8 +1702,11 @@ files.
 
 **Decision:** the hub repository a generation is written to (the queue's
 `target_namespace`/`target_repo`) is chosen per project and switched in
-place: `project.json` `media_repo`, set from the Gallery's "Saving to" picker
-or `/media-repo` in either front end. Resolution, most specific first:
+place: `project.json` `media_repo`, set from Settings → Connection (a section
+scoped to the open project), the Gallery's "Saving to" picker, or
+`/repository` in either front end. The user-facing name is "repository",
+not "media repo": it is meant to hold all of a project's assets, media
+first. Resolution, most specific first:
 project `media_repo` → project `remote_repo` → global `media.json`
 `hub_repo` → the hub's own default (`<username>/playground`). The picker
 names which one decided.

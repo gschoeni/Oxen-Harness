@@ -38,6 +38,7 @@ import { CodeReviewPage } from "./CodeReviewPage";
 import { PermissionsPage } from "./PermissionsPage";
 import { PreviewPage } from "./PreviewPage";
 import { MediaPage } from "./MediaPage";
+import { ProjectRepositorySection } from "./ProjectRepositorySection";
 import { CompressionPage } from "./CompressionPage";
 import { UsagePage } from "./UsagePage";
 import { LogsPage } from "../logs/LogsPage";
@@ -324,6 +325,8 @@ function ConnectionSettings() {
           login. Saving starts a new chat.
         </p>
       </section>
+
+      <ProjectRepositorySection />
 
       <section className="settings-section">
         <div className="settings-label">Current session</div>

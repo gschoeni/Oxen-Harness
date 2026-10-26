@@ -92,7 +92,7 @@ pub fn destination_for(root: &std::path::Path) -> Destination {
 /// Send the project's generations to `repo` (`namespace/name`) once the
 /// hub confirms the key can write there or will create it, saved in the
 /// hub's casing; `None` (or blank) clears the project's choice. The one
-/// write path `/media-repo` and the desktop picker share.
+/// write path `/repository` and the desktop pickers share.
 pub async fn choose_destination(
     root: &std::path::Path,
     repo: Option<&str>,

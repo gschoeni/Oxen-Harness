@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
@@ -20,7 +20,7 @@ beforeEach(() => {
 async function openPicker() {
   const user = userEvent.setup();
   render(<MediaDestinationPicker root="/w" />);
-  await user.click(await screen.findByRole("button", { name: "Hub repository: me/playground" }));
+  await user.click(await screen.findByRole("button", { name: "Repository: me/playground" }));
   // The namespaces arrive, the current one selected.
   expect(await screen.findByRole("button", { name: /^me/, pressed: true })).toBeInTheDocument();
   return user;
@@ -36,7 +36,7 @@ describe("MediaDestinationPicker", () => {
     await user.click(screen.getByRole("option", { name: /shots/ }));
     expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w", "Studio/shots");
     // Closed, and the trigger names the new home.
-    expect(await screen.findByRole("button", { name: "Hub repository: Studio/shots" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Repository: Studio/shots" })).toBeInTheDocument();
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
@@ -65,7 +65,7 @@ describe("MediaDestinationPicker", () => {
     await user.click(screen.getByRole("option", { name: /Use ox\/public/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("your access: viewer");
     expect(screen.getByRole("listbox")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Hub repository: me/playground" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Repository: me/playground" })).toBeInTheDocument();
   });
 
   it("a project's own choice can be dropped back to the default", async () => {
@@ -76,32 +76,31 @@ describe("MediaDestinationPicker", () => {
     });
     const user = userEvent.setup();
     render(<MediaDestinationPicker root="/w" />);
-    await user.click(await screen.findByRole("button", { name: "Hub repository: Studio/shots" }));
+    await user.click(await screen.findByRole("button", { name: "Repository: Studio/shots" }));
     await user.click(await screen.findByRole("option", { name: /Use the default/ }));
     expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w", null);
   });
-
-  it("opens when /media-repo asks", async () => {
-    render(<MediaDestinationPicker root="/w" />);
-    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
-    await act(() => dispatchSlashCommand("/media-repo"));
-    expect(await screen.findByRole("listbox")).toBeInTheDocument();
-    expect(useStore.getState().mediaDestinationPick).toBe(false);
-  });
 });
 
-describe("/media-repo", () => {
+describe("/repository", () => {
   it("checks and switches with an argument, and reports a refusal", async () => {
-    await dispatchSlashCommand("/media-repo Studio/shots");
+    await dispatchSlashCommand("/repository Studio/shots");
     expect(ipc.setMediaDestination).toHaveBeenCalledWith("/w", "Studio/shots");
     expect(useStore.getState().mediaDestinations["/w"]?.repo).toBe("Studio/shots");
 
     ipc.setMediaDestination.mockRejectedValueOnce("`nope/x` doesn't exist, and new repositories can only go in `me`");
-    await dispatchSlashCommand("/hub-repo nope/x");
+    await dispatchSlashCommand("/repo nope/x");
     expect(useStore.getState().mediaDestinations["/w"]?.repo).toBe("Studio/shots");
 
-    await dispatchSlashCommand("/media-repo clear");
+    await dispatchSlashCommand("/repository clear");
     expect(ipc.setMediaDestination).toHaveBeenLastCalledWith("/w", null);
+  });
+
+  it("opens Settings → Connection without an argument", async () => {
+    await dispatchSlashCommand("/repository");
+    expect(useStore.getState().settingsOpen).toBe(true);
+    expect(useStore.getState().settingsPage).toBe("connection");
+    expect(ipc.setMediaDestination).not.toHaveBeenCalled();
   });
 });
 

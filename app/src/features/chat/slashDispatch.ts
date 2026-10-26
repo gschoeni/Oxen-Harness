@@ -103,16 +103,16 @@ export async function dispatchSlashCommand(text: string): Promise<boolean> {
       case "/usage":
         state.openSettings("usage");
         break;
-      case "/media-repo": {
+      case "/repository": {
         const root = state.session?.workspace;
-        if (!root) note("Open a project to choose where its generations go.");
-        else if (!args) state.openMediaDestinationPicker();
+        if (!args) state.openSettings("connection");
+        else if (!root) note("Open a project to choose its repository.");
         else {
           const picked = await state.chooseMediaDestination(root, args === "clear" ? null : args);
           note(
             args === "clear"
-              ? `Generations go to ${picked.repo ?? "your playground"} again (the default).`
-              : `Generations now go to ${picked.repo}.`,
+              ? `This project's assets go to ${picked.repo ?? "your playground"} again (the default).`
+              : `This project's assets now go to ${picked.repo}.`,
           );
         }
         break;

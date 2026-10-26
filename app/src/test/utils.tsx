@@ -45,7 +45,6 @@ export function resetAll() {
     mediaPrefs: null,
     mediaFocus: null,
     mediaDestinations: {},
-    mediaDestinationPick: false,
     pendingAttachments: [],
     previews: {},
     previewClosed: {},
