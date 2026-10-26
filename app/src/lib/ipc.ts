@@ -486,15 +486,29 @@ export const saveRules = (rules: RuleSpec[]) => invoke<void>("save_rules", { rul
 export const checkRulePattern = (pattern: string, sample: string) =>
   invoke<PatternCheck>("check_rule_pattern", { pattern, sample });
 
-/** Open a native file picker for images and PDFs, returning the chosen absolute
- *  paths (empty if the user cancels). These feed the same attachment flow as an
- *  OS file drop. */
+/** Every file type a chat attachment can carry, grouped the way the backend
+ *  classifies them (`AttachmentKind::from_extension` in harness-llm): images
+ *  and PDFs reach the model directly; video and audio are references for the
+ *  generation models. */
+export const ATTACHMENT_FILTERS = [
+  { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic"] },
+  { name: "Video", extensions: ["mp4", "mov", "webm", "mkv", "avi", "m4v"] },
+  { name: "Audio", extensions: ["mp3", "wav", "m4a", "aac", "ogg", "oga", "flac", "opus"] },
+  { name: "PDFs", extensions: ["pdf"] },
+];
+
+/** Open a native file picker for anything a chat can attach, returning the
+ *  chosen absolute paths (empty if the user cancels). These feed the same
+ *  attachment flow as an OS file drop. */
 export async function pickAttachments(): Promise<string[]> {
   const selected = await open({
     multiple: true,
-    title: "Attach images or PDFs",
+    title: "Attach images, video, audio, or PDFs",
+    // The first filter is the one the dialog applies, so it admits every
+    // kind; the per-kind ones narrow the list on request.
     filters: [
-      { name: "Images & PDFs", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic", "pdf"] },
+      { name: "Images, video, audio & PDFs", extensions: ATTACHMENT_FILTERS.flatMap((f) => f.extensions) },
+      ...ATTACHMENT_FILTERS,
     ],
   });
   if (!selected) return [];
