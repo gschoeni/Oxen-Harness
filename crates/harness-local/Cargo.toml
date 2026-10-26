@@ -12,6 +12,7 @@ description = "Local LLM management (llama.cpp + GGUF download/serve) for oxen-h
 harness-config = { workspace = true }
 harness-core = { workspace = true }
 harness-http = { workspace = true }
+sha2 = "0.10"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

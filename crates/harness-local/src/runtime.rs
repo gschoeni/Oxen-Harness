@@ -22,6 +22,15 @@ use crate::LocalError;
 /// `b11803` is the first release with Recursive Flint support (`FlintForCausalLM`).
 pub const PINNED_VERSION: &str = "b11803";
 
+/// SHA-256 of the pinned macOS arm64 release asset, as GitHub publishes it
+/// (the asset's `digest`) and as a fresh download hashes. The archive holds
+/// a binary we then run, so a download that doesn't match is refused before
+/// anything is extracted. Bump together with [`PINNED_VERSION`]:
+/// `gh api repos/ggml-org/llama.cpp/releases/tags/<ver> --jq '.assets[] |
+/// select(.name | endswith("macos-arm64.tar.gz")) | .digest'`.
+const PINNED_MACOS_ARM64_SHA256: &str =
+    "742ad51ee1bcf2606b5875d3a45824f8e6fd9000dc4d7488107448e0d40ddd12";
+
 /// Where the managed runtime lives: `~/.oxen-harness/runtime/llama.cpp/`
 /// (honoring the `OXEN_HARNESS_DIR` override).
 fn runtime_root() -> Option<PathBuf> {
@@ -148,6 +157,10 @@ where
     });
     let archive = root.join(format!(".{asset}.part"));
     download_to_file(&url, &archive, &mut on_event).await?;
+    if let Err(e) = check_sha256(&archive, PINNED_MACOS_ARM64_SHA256) {
+        let _ = std::fs::remove_file(&archive);
+        return Err(e);
+    }
 
     on_event(RuntimeInstallEvent::Log {
         line: "Extracting…".to_string(),
@@ -191,6 +204,23 @@ where
         |downloaded, total| on_event(RuntimeInstallEvent::Progress { downloaded, total }),
     )
     .await
+}
+
+/// Refuse `path` unless its SHA-256 is `expected` (lowercase hex).
+fn check_sha256(path: &Path, expected: &str) -> Result<(), LocalError> {
+    use sha2::Digest;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = sha2::Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    let actual = format!("{:x}", hasher.finalize());
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(LocalError::Install(format!(
+            "the downloaded llama.cpp runtime failed its checksum (expected {expected}, got \
+             {actual}); refusing to install it"
+        )))
+    }
 }
 
 /// Extract a `.tar.gz` into `dest` (pure-Rust, no system `tar` needed).
@@ -252,6 +282,22 @@ mod tests {
             url,
             "https://github.com/ggml-org/llama.cpp/releases/download/b10002/llama-b10002-bin-macos-arm64.tar.gz"
         );
+    }
+
+    #[test]
+    fn a_download_must_match_the_pinned_checksum() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.tar.gz");
+        std::fs::write(&file, b"abc").unwrap();
+        // SHA-256 of "abc".
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        check_sha256(&file, abc).unwrap();
+        let err = check_sha256(&file, &"0".repeat(64)).unwrap_err();
+        assert!(err.to_string().contains("checksum"), "{err}");
+        assert_eq!(PINNED_MACOS_ARM64_SHA256.len(), 64);
+        assert!(PINNED_MACOS_ARM64_SHA256
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[test]
