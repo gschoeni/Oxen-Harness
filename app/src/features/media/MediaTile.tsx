@@ -11,6 +11,7 @@ import type { MediaItem } from "../../lib/types";
 import { elapsedSince, isInFlight } from "../../lib/media";
 import { useAssetSrc } from "../files/useAssetSrc";
 import { setDragPaths } from "../files/dnd";
+import { VideoThumb } from "../video/VideoThumb";
 import { downloadLabel, useDownload } from "./useDownload";
 
 export function MediaTile({
@@ -120,24 +121,9 @@ function TileDownload({ workspace, path, kind }: { workspace: string; path: stri
 function TilePreview({ item, workspace, bust }: { item: MediaItem; workspace: string; bust: number }) {
   const src = useAssetSrc(workspace, item.path ?? "", bust);
   const poster = useAssetSrc(workspace, item.poster ?? "", bust);
-  const videoRef = useRef<HTMLVideoElement>(null);
   if (!src) return <span className="gallery-tile-loading" aria-hidden />;
   if (item.kind === "video") {
-    return (
-      <video
-        ref={videoRef}
-        src={src}
-        poster={item.poster && poster ? poster : undefined}
-        muted
-        loop
-        playsInline
-        preload="metadata"
-        onMouseEnter={() => void videoRef.current?.play().catch(() => {})}
-        onMouseLeave={() => {
-          videoRef.current?.pause();
-        }}
-      />
-    );
+    return <VideoThumb src={src} poster={item.poster ? poster : null} label={item.prompt} hoverPlay />;
   }
   return <img src={src} alt={item.prompt} loading="lazy" draggable={false} />;
 }

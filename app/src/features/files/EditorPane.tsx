@@ -29,6 +29,7 @@ import { useWorkbenchAPI } from "../workbench/api";
 import { useAssetSrc } from "./useAssetSrc";
 import { basename } from "../../lib/format";
 import { isImagePath, isVideoPath } from "../../lib/attachments";
+import { VideoThumb } from "../video/VideoThumb";
 import { CodeEditor, type EditorSelection } from "./CodeEditor";
 import { DiffView } from "./DiffView";
 import { diffTab, diffTarget, isDiffPath } from "./diff";
@@ -397,7 +398,7 @@ function MediaView({
   );
 }
 
-// ---- several images: the gallery grid ---------------------------------------
+// ---- several images and videos: the gallery grid ------------------------------
 
 function Gallery({
   workspace,
@@ -408,23 +409,23 @@ function Gallery({
   paths: string[];
   onClose: () => void;
 }) {
-  const images = paths.filter(isImagePath);
+  const media = paths.filter((p) => isImagePath(p) || isVideoPath(p));
   // One shared cache-buster: a batch touching any tile refreshes the grid.
   const [bust, setBust] = useState(0);
-  useFsChanged(workspace, images, () => setBust((b) => b + 1));
+  useFsChanged(workspace, media, () => setBust((b) => b + 1));
   return (
     <>
       <header className="canvas-head editor-head">
         <div className="editor-path">
           <ImageIcon size={14} aria-hidden="true" />
-          <span className="editor-fname">{images.length} images</span>
+          <span className="editor-fname">{galleryTitle(media)}</span>
         </div>
         <div className="editor-actions">
           <CloseButton onClose={onClose} />
         </div>
       </header>
       <div className="media-grid">
-        {images.map((p) => (
+        {media.map((p) => (
           <GalleryTile key={p} workspace={workspace} path={p} bust={bust} />
         ))}
       </div>
@@ -444,8 +445,19 @@ function GalleryTile({ workspace, path, bust }: { workspace: string; path: strin
       draggable
       onDragStart={(e: DragEvent) => setDragPaths(e.dataTransfer, [abs])}
     >
-      <img src={src} alt={basename(path)} loading="lazy" draggable={false} />
+      {isVideoPath(path) ? (
+        <VideoThumb src={src} label={basename(path)} />
+      ) : (
+        <img src={src} alt={basename(path)} loading="lazy" draggable={false} />
+      )}
       <span className="media-tile-name">{basename(path)}</span>
     </button>
   );
+}
+
+/** `3 images`, `2 videos`, or `5 images & videos`. */
+function galleryTitle(paths: string[]): string {
+  const videos = paths.filter(isVideoPath).length;
+  const noun = videos === 0 ? "images" : videos === paths.length ? "videos" : "images & videos";
+  return `${paths.length} ${noun}`;
 }

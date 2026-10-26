@@ -393,6 +393,10 @@
   cursor: default;
   background: #000;
 }
+.media-tile .video-still-button {
+  width: 100%;
+  height: 100%;
+}
 .media-tile-open {
   position: absolute;
   top: var(--space-1);

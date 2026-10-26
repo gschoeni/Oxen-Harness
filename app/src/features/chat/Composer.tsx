@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type DragEvent } from "react";
-import { ArrowUp, FileText, Film, GraduationCap, Music, Paperclip, Square } from "lucide-react";
+import { ArrowUp, FileText, GraduationCap, Music, Paperclip, Square } from "lucide-react";
 import { useStore } from "../../lib/store";
 import { StudyButton } from "./StudyButton";
 import { AttachmentImage } from "./AttachmentImage";
@@ -290,13 +290,14 @@ const ComposerToolbar = memo(function ComposerToolbar({ busy }: { busy: boolean 
   );
 });
 
-/** A tile's picture: the image itself, or a kind icon for video/audio/files. */
+/** A tile's picture: the image itself, a video's thumbnail, or a kind icon
+ *  for audio/files. */
 function TrayPreview({ attachment }: { attachment: StagedAttachment }) {
-  if (isImagePath(attachment.path)) {
-    return <AttachmentImage src={attachment.path} alt={attachment.name} className="composer-tray-img" />;
+  if (isImagePath(attachment.path) || isVideoPath(attachment.path)) {
+    return <AttachmentImage src={attachment.path} alt={attachment.name} className="composer-tray-img" thumbnail />;
   }
-  const Icon = isVideoPath(attachment.path) ? Film : isAudioPath(attachment.path) ? Music : FileText;
-  const kind = isVideoPath(attachment.path) ? "video" : isAudioPath(attachment.path) ? "audio" : "file";
+  const Icon = isAudioPath(attachment.path) ? Music : FileText;
+  const kind = isAudioPath(attachment.path) ? "audio" : "file";
   return (
     <span className={`composer-tray-icon ${kind}`} aria-hidden="true">
       <Icon size={20} />

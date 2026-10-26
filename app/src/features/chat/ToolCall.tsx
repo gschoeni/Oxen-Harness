@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "../../components/ui";
+import { InlineVideo } from "../video/VideoThumb";
 import { configureBraveKey } from "../../lib/ipc";
 import { elapsed, relPath } from "../../lib/format";
 import { canvasDocFromArgs } from "../../lib/canvas";
@@ -480,9 +481,7 @@ function WorkspaceMedia({
         draggable
         onDragStart={dragStart}
       >
-        {src && (
-          <video src={src} controls preload="metadata" poster={poster && posterSrc ? posterSrc : undefined} />
-        )}
+        {src && <InlineVideo src={src} poster={poster ? posterSrc : null} label={name} />}
         <button type="button" className="media-tile-open" onClick={onOpen} aria-label={`Open ${name} in the gallery`}>
           gallery ›
         </button>

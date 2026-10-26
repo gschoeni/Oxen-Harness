@@ -7,8 +7,9 @@
 // the JS heap for as long as the bubble is mounted. The webview's own image
 // cache manages the decoded bitmap and can evict it under pressure.
 //
-// Videos and audio (references for video generation) render as native players
-// over the same asset route.
+// Videos (references for video generation) render as a thumbnail with a play
+// badge — a click turns it into the native player, or, in a tray tile, it
+// stays a thumbnail. Audio renders as a native player over the same route.
 
 import { useEffect, useState, type DragEvent } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -16,15 +17,20 @@ import { attachmentPath } from "../../lib/ipc";
 import { isAudioPath, isVideoPath } from "../../lib/attachments";
 import { useStore } from "../../lib/store";
 import { setDragPaths } from "../files/dnd";
+import { InlineVideo, VideoThumb } from "../video/VideoThumb";
 
 export function AttachmentImage({
   src,
   alt,
   className,
+  thumbnail = false,
 }: {
   src: string;
   alt?: string;
   className?: string;
+  /** A video stays a still (a composer tray tile) rather than becoming a
+   *  player when clicked. */
+  thumbnail?: boolean;
 }) {
   const session = useStore((s) => s.session?.session_id);
   const [abs, setAbs] = useState<string | null>(null);
@@ -55,7 +61,12 @@ export function AttachmentImage({
     title: "Drag into the chat to attach",
   };
   if (isVideoPath(src)) {
-    return <video className={className} src={url} controls preload="metadata" aria-label={alt ?? "video attachment"} {...drag} />;
+    const label = alt ?? "video attachment";
+    return thumbnail ? (
+      <VideoThumb src={url} label={label} className={className} />
+    ) : (
+      <InlineVideo src={url} label={label} className={className} title={drag.title} onDragStart={drag.onDragStart} />
+    );
   }
   if (isAudioPath(src)) {
     return <audio className={className} src={url} controls preload="metadata" aria-label={alt ?? "audio attachment"} {...drag} />;

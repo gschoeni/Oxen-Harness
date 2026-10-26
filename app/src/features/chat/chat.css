@@ -954,10 +954,6 @@
   color: var(--accent);
   background: var(--accent-tint-strong);
 }
-.composer-tray-icon.video {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg) 85%, var(--accent));
-}
 .composer-tray-name {
   position: absolute;
   width: 1px;
@@ -1650,6 +1646,12 @@
   max-height: 260px;
   border-radius: var(--radius-sm);
   background: #000;
+}
+/* A video attachment is a 16:9 thumbnail until clicked into a player. */
+.msg-attachments .video-still-button {
+  width: 260px;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm);
 }
 .msg-attachments audio {
   width: 260px;

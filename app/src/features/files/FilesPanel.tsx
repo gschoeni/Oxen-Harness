@@ -444,13 +444,14 @@ export function FilesPanel({ onResizeStart }: { onResizeStart?: (e: PointerEvent
 
   function clickFile(e: MouseEvent, path: string) {
     if (e.metaKey || e.ctrlKey) {
-      // Build a multi-selection; two or more highlighted images open as a grid.
+      // Build a multi-selection; two or more highlighted images or videos
+      // open as a grid.
       const next = new Set(selected);
       if (next.has(path)) next.delete(path);
       else next.add(path);
       setSelected(next);
-      const images = [...next].filter(isImagePath);
-      if (images.length > 1) openInViewer(images);
+      const visual = [...next].filter((p) => isImagePath(p) || isVideoPath(p));
+      if (visual.length > 1) openInViewer(visual);
       return;
     }
     setSelected(new Set([path]));

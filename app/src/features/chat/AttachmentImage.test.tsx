@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("../../lib/ipc", () => import("../../test/ipcMock"));
 
@@ -27,13 +27,23 @@ describe("AttachmentImage", () => {
     expect(setData).toHaveBeenCalledWith("application/x-oxen-workspace-files", JSON.stringify(["/ws/attachments/photo.png"]));
   });
 
-  it("renders a draggable player for a video attachment", async () => {
+  it("renders a video as a draggable thumbnail that becomes a player on click", async () => {
     const { container } = render(<AttachmentImage src="/tmp/clip.mp4" />);
-    const video = await waitFor(() => {
-      const el = container.querySelector("video");
-      expect(el).toBeTruthy();
-      return el as HTMLVideoElement;
-    });
+    const button = await screen.findByRole("button", { name: "Play video attachment" });
+    expect(button.getAttribute("draggable")).toBe("true");
+    expect(container.querySelector(".video-still-play")).not.toBeNull();
+    expect(container.querySelector("video[controls]")).toBeNull();
+
+    fireEvent.click(button);
+    const video = container.querySelector("video") as HTMLVideoElement;
+    expect(video.hasAttribute("controls")).toBe(true);
     expect(video.getAttribute("draggable")).toBe("true");
+  });
+
+  it("keeps a tray video a still thumbnail", async () => {
+    const { container } = render(<AttachmentImage src="/tmp/clip.mp4" thumbnail />);
+    await waitFor(() => expect(container.querySelector(".video-still video")).toBeTruthy());
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container.querySelector("video[controls]")).toBeNull();
   });
 });

@@ -146,6 +146,10 @@ button.gallery-inflight:hover {
 .gallery-tile video {
   background: #000;
 }
+.gallery-tile .video-still {
+  position: absolute;
+  inset: 0;
+}
 .gallery-tile-badge {
   position: absolute;
   left: var(--space-1);

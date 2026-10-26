@@ -31,6 +31,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import { ArrowLeftRight, Pause, Play } from "lucide-react";
 import { IconButton } from "../../components/ui";
 import { isImagePath, isVideoPath } from "../../lib/attachments";
+import { VideoThumb } from "../video/VideoThumb";
 import type { MediaItem, MediaSource } from "../../lib/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { fsAssetPath } from "../../lib/ipc";
@@ -422,7 +423,7 @@ function Layer({
 function Thumb({ option, src }: { option: CompareOption; src: string | undefined }) {
   if (!src) return <span className="compare-thumb blank" aria-hidden="true" />;
   return option.kind === "video" ? (
-    <video className="compare-thumb" src={src} muted playsInline preload="metadata" />
+    <VideoThumb src={src} label={option.title} className="compare-thumb" />
   ) : (
     <img className="compare-thumb" src={src} alt="" draggable={false} />
   );
