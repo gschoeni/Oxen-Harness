@@ -57,9 +57,11 @@ impl Interjections {
         }
     }
 
-    /// Drain everything queued, in arrival order. Releases the held steer:
-    /// the messages are on their way to the model, so a tool's next wait
-    /// runs its course unless the user speaks again.
+    /// Drain everything queued, in arrival order — the turn loop delivering
+    /// it, or a host taking it back (its user edited or removed a queued
+    /// message; nothing drained reaches the model unless pushed again).
+    /// Either way the held steer is released: a tool's next wait runs its
+    /// course unless the user speaks again.
     pub fn take_all(&self) -> Vec<String> {
         let drained: Vec<String> = self
             .inner
@@ -71,16 +73,6 @@ impl Interjections {
             notifier.release();
         }
         drained
-    }
-
-    /// Take back everything still undelivered — for a host whose user edited
-    /// or removed a queued message. The same drain as [`take_all`], named for
-    /// the caller's intent: nothing returned here reaches the model unless it
-    /// is pushed again.
-    ///
-    /// [`take_all`]: Self::take_all
-    pub fn retract_all(&self) -> Vec<String> {
-        self.take_all()
     }
 
     /// How many messages are waiting.

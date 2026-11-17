@@ -629,8 +629,11 @@ async fn run_one_turn(
                                     // its next safe point (not queued for
                                     // after). Ctrl+Enter / Ctrl+Q stack a
                                     // follow-up for later.
-                                    let target = match steer_watched_lane(trimmed) {
-                                        Some(Ok(label)) => format!("🗣 steering {label}:"),
+                                    // Only the main turn's messages can be
+                                    // sent early (a bare ⏎), so only they
+                                    // carry the hint.
+                                    let (target, hint) = match steer_watched_lane(trimmed) {
+                                        Some(Ok(label)) => (format!("🗣 steering {label}:"), ""),
                                         Some(Err(error)) => {
                                             let ui = s.ui.clone();
                                             s.print_line(&format!("  {}", ui.dim(&error)));
@@ -640,10 +643,12 @@ async fn run_one_turn(
                                         }
                                         None => {
                                             interject.push(expand_pastes(trimmed));
-                                            "🗣 queued for the next step:".to_string()
+                                            (
+                                                "🗣 queued for the next step:".to_string(),
+                                                "  · ⏎ again to send now",
+                                            )
                                         }
                                     };
-                                    let to_main = target.starts_with("🗣 queued");
                                     let ui = s.ui.clone();
                                     s.print_line(&format!(
                                         "  {} {}{}",
@@ -652,11 +657,7 @@ async fn run_one_turn(
                                             trimmed.split('\n').next().unwrap_or(trimmed),
                                             80
                                         )),
-                                        if to_main {
-                                            ui.dim("  · ⏎ again to send now")
-                                        } else {
-                                            String::new()
-                                        },
+                                        ui.dim(hint),
                                     ));
                                 } else {
                                     // A /command can't stack — the queue drains

@@ -2617,7 +2617,7 @@ impl SessionService {
     /// turn is running or nothing is waiting.
     pub async fn retract_interjections(&self, session: &str) -> Vec<String> {
         match self.interjections.lock().await.get(session) {
-            Some(handle) => handle.retract_all(),
+            Some(handle) => handle.take_all(),
             None => Vec::new(),
         }
     }
