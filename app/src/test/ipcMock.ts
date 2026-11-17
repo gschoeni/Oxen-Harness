@@ -256,6 +256,10 @@ export const sessionInfo = vi.fn(async () => sampleSession);
 export const listSessions = vi.fn(async () => []);
 export const listAgents = vi.fn(async (): Promise<AgentSummary[]> => []);
 export const interjectAgent = vi.fn(async () => true);
+// No turn to steer by default, so a queued prompt waits for the turn's end
+// unless a test opts into mid-turn delivery.
+export const interject = vi.fn(async (_session: string, _text: string) => false);
+export const retractInterjections = vi.fn(async (_session: string) => [] as string[]);
 export const listTasks = vi.fn(async (): Promise<TaskSummary[]> => []);
 export const killBackgroundTask = vi.fn(async () => "killed");
 export const totalTokensUsed = vi.fn(async () => 0);
@@ -407,6 +411,8 @@ export const onRetry = listener("retry");
 export const onQuestion = listener("question");
 export const onTurnCompleted = listener("turnCompleted");
 export const onTurnFailed = listener("turnFailed");
+export const onTurnStarted = listener("turnStarted");
+export const onInterjected = listener("interjected");
 export const onFileDrop = listener("fileDrop");
 export const pickAttachments = vi.fn(async () => [] as string[]);
 export const stageDroppedFile = vi.fn(async (name: string, _bytes: Uint8Array) => `/ws/.oxen-harness/dropped/${name}`);
@@ -688,6 +694,8 @@ export function resetIpc() {
   listSessions.mockReset().mockResolvedValue([]);
   listAgents.mockReset().mockResolvedValue([]);
   interjectAgent.mockReset().mockResolvedValue(true);
+  interject.mockReset().mockResolvedValue(false);
+  retractInterjections.mockReset().mockResolvedValue([]);
   listTasks.mockReset().mockResolvedValue([]);
   takeLaunchSurface.mockReset().mockResolvedValue(null);
   killBackgroundTask.mockReset().mockResolvedValue("killed");
@@ -903,6 +911,8 @@ export function resetIpc() {
     onQuestion,
     onTurnCompleted,
     onTurnFailed,
+    onTurnStarted,
+    onInterjected,
     onApprovalRequest,
     onApproval,
     onFileDrop,

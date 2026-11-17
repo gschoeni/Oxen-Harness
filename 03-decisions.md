@@ -1750,3 +1750,26 @@ a parameter instead of reading it.
 appears outside `.cargo`/`.rustup` (should be nothing), and run the CLI test
 binary as a job-controlled background process under a pty (`script` +
 `set -m`) — it must finish, not stop.
+
+## A queued message goes at the turn's next step, in both front ends (2026-11-17)
+
+**Context:** the desktop queue held a message until the whole turn ended —
+minutes, on a long agentic run — while the TUI's Enter already steered into
+the running turn. Claude Code folds a queued prompt in at the next tool-call
+boundary; Codex does the same on Enter ("steer") and sends pending steers at
+once when the turn is interrupted.
+
+**Decision:** one mechanism, `Interjections`, for both. A message queued
+mid-turn is handed to the running turn and delivered between model rounds;
+`AgentEvent::Interjected` / `turn.interjected` marks the moment it reaches
+the model, and until then a UI shows it as queued. "Send now" is a cancel:
+a stopped turn ends cleanly and the host runs what was still queued as a
+follow-up turn (TUI: a bare ⏎ on the empty composer; desktop: the queue's
+**Send now** button, or Stop). A turn that *fails* drops what it had not
+delivered — the client still holds it (no event arrived) and sends it
+again, so nothing can be delivered twice. The host therefore keeps no
+steering across turns.
+
+**Limits:** the channel carries text, so a desktop prompt with attachments
+(and anything queued behind it, to keep the typed order) still waits for the
+turn's end. The TUI's Ctrl+Q queue is unchanged: it means "after this turn".

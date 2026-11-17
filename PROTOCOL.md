@@ -55,6 +55,7 @@ The catalog (see `harness-protocol/src/event.rs` for the exact fields):
 | type | meaning |
 |---|---|
 | `turn.started` / `turn.completed` / `turn.failed` | turn lifecycle (completed carries the final `text`) |
+| `turn.interjected` | a message sent with `…/interject` just reached the model (`text`); until then it is only queued |
 | `turn.delivery_ready` | background work (a `wait: false` generation or fleet, a background shell task) finished; a running turn delivers it itself, an idle chat needs `POST …/turns/deliver` |
 | `agent.token` | streamed assistant text (batched ~512 bytes) |
 | `agent.tool` | tool call start (`detail` = args) / end (`detail` = result) |
@@ -117,11 +118,23 @@ normal UI pattern. Only one turn (or review/loop) runs per session at a time;
 different sessions run concurrently.
 
 `POST …/interject` delivers a user message *into* the running turn: it enters
-the transcript at the turn loop's next safe point (framed so the model knows
-it arrived mid-work), and a message that lands while the final reply streams
-forces one more model round rather than being dropped. `accepted: false`
-means no turn was running — send the text as an ordinary `…/turns` prompt
-instead.
+the transcript at the turn loop's next safe point (between model rounds), and
+a message that lands while the final reply streams forces one more model
+round rather than being dropped. `accepted: false` means no turn was running
+— send the text as an ordinary `…/turns` prompt instead.
+
+An accepted message is *queued*, not yet delivered: `turn.interjected` fires
+when it reaches the model, so a client keeps showing it as pending until
+then. Three ways it resolves:
+
+- **Next step** — the usual case: delivered between rounds, mid-turn.
+- **Send now** — cancel the turn (`…/cancel`): a stopped turn ends cleanly,
+  and whatever was still queued runs at once as a follow-up turn (announced
+  with `turn.interjected`, then a second `turn.started`), all inside the
+  original `…/turns` request.
+- **Dropped** — a turn that *fails* (`turn.failed`) discards what it had not
+  delivered. No `turn.interjected` was sent for it, so it is still the
+  client's to send.
 
 Threads (the overview every project page and chat list reads):
 

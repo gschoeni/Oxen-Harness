@@ -71,6 +71,11 @@ pub enum AgentEvent {
         /// The exit code, or `None` when the task died on a signal.
         exit_code: Option<i32>,
     },
+    /// A message the user sent mid-turn (see [`crate::Interjections`]) just
+    /// entered the transcript: the model's next round sees it. `text` is the
+    /// message as it was sent, so a UI can move it out of its "queued" list
+    /// and into the conversation at the point it actually landed.
+    Interjected { text: String },
     /// A result that finished on its own (a `wait: false` fleet) was just
     /// delivered to the model as a message; `title` is the one-line notice.
     AsideDelivered { kind: String, title: String },

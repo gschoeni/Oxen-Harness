@@ -53,6 +53,28 @@ pub(crate) async fn cancel_turn(state: State<'_, AppState>, session: String) -> 
     Ok(())
 }
 
+/// Hand the chat's running turn a message for its next step (between model
+/// rounds), instead of holding it until the whole turn ends. `false` when no
+/// turn is running — the UI then sends it as an ordinary prompt.
+#[tauri::command]
+pub(crate) async fn interject(
+    state: State<'_, AppState>,
+    session: String,
+    text: String,
+) -> Result<bool, String> {
+    Ok(state.interject(&session, text).await)
+}
+
+/// Take back the messages `interject` queued that the turn has not delivered
+/// yet, so an edited or removed one never reaches the model.
+#[tauri::command]
+pub(crate) async fn retract_interjections(
+    state: State<'_, AppState>,
+    session: String,
+) -> Result<Vec<String>, String> {
+    Ok(state.retract_interjections(&session).await)
+}
+
 /// Stop one `spawn_agents` fleet (named on its `fleet://started`) without
 /// ending the turn; `false` once it has already ended.
 #[tauri::command]

@@ -179,6 +179,17 @@ pub(crate) fn cue_for(ui: &Ui, event: &AgentEvent) -> Cue {
             ),
             path: path.clone(),
         },
+        // A message typed mid-turn just reached the model: say so at the
+        // point in the transcript where it landed, since the echo printed
+        // when it was typed only promised delivery.
+        AgentEvent::Interjected { text } => Cue::Block {
+            lines: vec![format!(
+                "  {} {}",
+                ui.brown("🗣 sent:"),
+                ui.cream(&truncate(text.lines().next().unwrap_or(text), 80))
+            )],
+            then: NextSpinner::Thinking,
+        },
         AgentEvent::AsideDelivered { title, .. } => Cue::Block {
             lines: vec![format!(
                 "  {} {}",
@@ -490,6 +501,26 @@ mod tests {
             ),
             Cue::AskUserEnd
         ));
+    }
+
+    #[test]
+    fn a_delivered_mid_turn_message_is_announced_where_it_landed() {
+        let cue = cue_for(
+            &ui(),
+            &AgentEvent::Interjected {
+                text: "use the other file\nand rerun".into(),
+            },
+        );
+        let Cue::Block { lines, .. } = cue else {
+            panic!("a delivery should print a transcript line");
+        };
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("sent:"), "{lines:?}");
+        assert!(lines[0].contains("use the other file"), "{lines:?}");
+        assert!(
+            !lines[0].contains("and rerun"),
+            "first line only: {lines:?}"
+        );
     }
 
     #[test]

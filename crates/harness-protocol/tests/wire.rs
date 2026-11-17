@@ -132,6 +132,20 @@ fn turn_lifecycle_wire_shapes() {
     assert_eq!(json(&failed)["type"], "turn.failed");
     round_trips(failed);
 
+    let interjected = ProtocolEvent::Interjected {
+        session: "s1".into(),
+        text: "also check the tests".into(),
+    };
+    assert_eq!(
+        json(&interjected),
+        serde_json::json!({
+            "type": "turn.interjected",
+            "session": "s1",
+            "text": "also check the tests",
+        })
+    );
+    round_trips(interjected);
+
     let ready = ProtocolEvent::DeliveryReady {
         session: "s1".into(),
     };
@@ -702,6 +716,13 @@ fn legacy_channel_names() {
                 error: "e".into(),
             },
             "turn://failed",
+        ),
+        (
+            ProtocolEvent::Interjected {
+                session: "s".into(),
+                text: "t".into(),
+            },
+            "turn://interjected",
         ),
         (
             ProtocolEvent::DeliveryReady {

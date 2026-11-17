@@ -118,6 +118,14 @@ export const listAgents = (session: string) =>
  *  the lane has ended. */
 export const interjectAgent = (session: string, lane: string, text: string) =>
   invoke<boolean>("interject_agent", { session, lane, text });
+/** Hand a chat's running turn a message for its next step (between model
+ *  rounds) instead of holding it until the turn ends. Resolves false when no
+ *  turn is running. Delivery is announced by `onInterjected`. */
+export const interject = (session: string, text: string) =>
+  invoke<boolean>("interject", { session, text });
+/** Take back every `interject`ed message the turn has not delivered yet. */
+export const retractInterjections = (session: string) =>
+  invoke<string[]>("retract_interjections", { session });
 /** A chat's background shell tasks, running and ended. */
 export const listTasks = (session: string) => invoke<TaskSummary[]>("list_tasks", { session });
 /** Kill one background task (its whole process group). */
@@ -575,6 +583,13 @@ export const onRetry = (handler: (e: RetryEvent) => void) =>
  *  (the ones it holds no `runTurn` promise for). */
 export const onTurnCompleted = (handler: (e: TurnEndedEvent) => void) =>
   listen<{ session: string; text: string }>("turn://completed", (e) => handler(e.payload));
+/** A turn began running (also the follow-up turn a stopped turn's queued
+ *  messages run as). */
+export const onTurnStarted = (handler: (session: string) => void) =>
+  listen<{ session: string }>("turn://started", (e) => handler(e.payload.session));
+/** A message handed over with `interject` just reached the model. */
+export const onInterjected = (handler: (e: { session: string; text: string }) => void) =>
+  listen<{ session: string; text: string }>("turn://interjected", (e) => handler(e.payload));
 export const onTurnFailed = (handler: (e: TurnEndedEvent) => void) =>
   listen<{ session: string; error: string }>("turn://failed", (e) => handler(e.payload));
 

@@ -102,6 +102,10 @@ pub fn agent_event(
             kind: "image".into(),
             text: format!("image attached: {path}"),
         },
+        AgentEvent::Interjected { text } => ProtocolEvent::Interjected {
+            session,
+            text: text.clone(),
+        },
         AgentEvent::AsideDelivered { kind, title } => ProtocolEvent::Notice {
             session,
             kind: kind.clone(),

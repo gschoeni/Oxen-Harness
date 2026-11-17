@@ -387,6 +387,94 @@ describe("store: sessions", () => {
     );
   });
 
+  // A turn held open, with the chat in view and mid-turn delivery available.
+  function runningTurn() {
+    let finish!: (v: string) => void;
+    ipc.runTurn.mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    ipc.interject.mockResolvedValue(true);
+    useStore.setState({
+      session: { ...ipc.sampleSession, session_id: "s1" },
+      infos: { s1: { ...ipc.sampleSession, session_id: "s1" } },
+      threads: { s1: [] },
+    });
+    useStore.getState().send("first");
+    return (text: string) => finish(text);
+  }
+  const queued = () => useStore.getState().queues["s1"] ?? [];
+
+  it("hands a queued prompt to the running turn and shows it where it lands", async () => {
+    const finish = runningTurn();
+    useStore.getState().ingestToken("s1", "Working on it");
+    useStore.getState().send("also bump the version");
+
+    // Handed over at once, but still queued until the model actually has it.
+    await vi.waitFor(() => expect(queued()).toEqual([{ text: "also bump the version", attachments: [], steered: true }]));
+    expect(ipc.interject).toHaveBeenCalledWith("s1", "also bump the version");
+
+    useStore.getState().ingestInterjected({ session: "s1", text: "also bump the version" });
+    expect(queued()).toEqual([]);
+    const thread = useStore.getState().threads["s1"];
+    expect(thread.map((i) => i.kind)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(thread[1]).toMatchObject({ text: "Working on it", streaming: false });
+    expect(thread[2]).toMatchObject({ text: "also bump the version" });
+    expect(thread[3]).toMatchObject({ streaming: true });
+
+    // The turn's end has nothing left to send: delivered once, not twice.
+    finish("Bumped.");
+    await vi.waitFor(() => expect(useStore.getState().runStatus["s1"]).toBeUndefined());
+    expect(ipc.runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a queued prompt after the turn when the turn never took it", async () => {
+    const finish = runningTurn();
+    ipc.runTurn.mockResolvedValueOnce("Second done.");
+    useStore.getState().send("second");
+    await vi.waitFor(() => expect(queued()[0]?.steered).toBe(true));
+
+    // The turn ended without a delivery (it failed over, or was evicted):
+    // the prompt is still this client's, so it goes out as the next turn.
+    finish("First done.");
+    await vi.waitFor(() => expect(ipc.runTurn).toHaveBeenLastCalledWith("s1", "second", []));
+  });
+
+  it("holds a prompt with attachments, and everything behind it, for the turn's end", async () => {
+    runningTurn();
+    useStore.getState().send("look at this", ["/tmp/diagram.png"]);
+    useStore.getState().send("then tidy up");
+    await Promise.resolve();
+    expect(ipc.interject).not.toHaveBeenCalled();
+    expect(queued().some((q) => q.steered)).toBe(false);
+  });
+
+  it("takes back a handed-over prompt the user removes or edits", async () => {
+    runningTurn();
+    useStore.getState().send("one");
+    useStore.getState().send("two");
+    await vi.waitFor(() => expect(queued().map((q) => q.steered)).toEqual([true, true]));
+
+    // The backend still holds both; the user drops "one" and rewrites "two".
+    ipc.retractInterjections.mockResolvedValueOnce(["one", "two"]);
+    ipc.interject.mockClear();
+    useStore.getState().setQueue(["two, but carefully"]);
+
+    await vi.waitFor(() =>
+      expect(queued()).toEqual([{ text: "two, but carefully", attachments: [], steered: true }]),
+    );
+    expect(ipc.retractInterjections).toHaveBeenCalledWith("s1");
+    expect(ipc.interject.mock.calls).toEqual([["s1", "two, but carefully"]]);
+  });
+
+  it("hands over what is already queued when a turn starts", async () => {
+    runningTurn();
+    ipc.interject.mockResolvedValueOnce(false); // not registered yet
+    useStore.getState().send("queued early");
+    await vi.waitFor(() => expect(ipc.interject).toHaveBeenCalledTimes(1));
+    expect(queued()[0].steered).toBeUndefined();
+
+    useStore.getState().ingestTurnStarted("s1");
+    await vi.waitFor(() => expect(queued()[0].steered).toBe(true));
+  });
+
   it("keeps hidden queue attachments when the visible text list is unchanged", () => {
     useStore.setState({
       session: { ...ipc.sampleSession, session_id: "s1" },

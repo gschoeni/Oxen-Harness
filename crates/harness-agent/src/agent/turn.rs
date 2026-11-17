@@ -260,7 +260,7 @@ impl Agent {
             // lands mid-work, not after the turn ends. Background commands
             // that finished meanwhile land the same way, so the model never
             // has to poll for them.
-            self.drain_interjections()?;
+            self.drain_interjections(&mut on_event)?;
             self.deliver_settled_tasks(&mut on_event).await?;
 
             // Make room for the next request, then send it and fold the round's
@@ -433,7 +433,7 @@ impl Agent {
                 // be seen before the turn ends: drain it and go around again.
                 // Checked before the nudges — a real user message outranks a
                 // synthetic corrective.
-                if self.drain_interjections()? {
+                if self.drain_interjections(&mut on_event)? {
                     continue;
                 }
                 // Likewise a background task that finished while the reply
@@ -997,12 +997,17 @@ impl Agent {
     /// Move everything the user sent mid-turn into the transcript, each as
     /// its own user message (FIFO, never merged — see [`crate::interject`]).
     /// Returns whether anything was drained, so the caller can force another
-    /// model round when the turn was about to end.
-    fn drain_interjections(&mut self) -> Result<bool, AgentError> {
+    /// model round when the turn was about to end. Each one is announced
+    /// with [`AgentEvent::Interjected`] once it is in the transcript.
+    fn drain_interjections(
+        &mut self,
+        on_event: &mut impl FnMut(&AgentEvent),
+    ) -> Result<bool, AgentError> {
         let pending = self.interjections.take_all();
         let drained = !pending.is_empty();
         for text in pending {
             self.push(ChatMessage::user(prompt::clip_interjection(&text)))?;
+            on_event(&AgentEvent::Interjected { text });
         }
         Ok(drained)
     }
@@ -2250,8 +2255,18 @@ mod tests {
         // Push from the event callback — i.e. while the first reply is
         // streaming, exactly when a real user would be typing.
         let pushed = std::cell::Cell::new(false);
+        // What the host saw, in order: the delivery is announced after the
+        // first reply's tokens and before the second's.
+        let seen = std::cell::RefCell::new(Vec::new());
         let out = agent
             .run_turn("hello", |e| {
+                match e {
+                    AgentEvent::Token(t) => seen.borrow_mut().push(format!("token:{t}")),
+                    AgentEvent::Interjected { text } => {
+                        seen.borrow_mut().push(format!("interjected:{text}"))
+                    }
+                    _ => {}
+                }
                 if matches!(e, AgentEvent::Token(_)) && !pushed.get() {
                     pushed.set(true);
                     handle.push("wait — also check the tests");
@@ -2259,6 +2274,15 @@ mod tests {
             })
             .await
             .unwrap();
+        let seen = seen.into_inner();
+        let delivered = seen
+            .iter()
+            .position(|s| s == "interjected:wait — also check the tests")
+            .expect("the delivery should be announced");
+        assert!(seen[..delivered].concat().contains("first answer"));
+        assert!(seen[delivered..]
+            .concat()
+            .contains("addressed the steering"));
 
         // The turn did not end on "first answer": the interjection forced a
         // second round whose reply is the final one.

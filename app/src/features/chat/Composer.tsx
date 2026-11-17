@@ -178,7 +178,7 @@ export function Composer({
             value={value}
             placeholder={
               busy
-                ? (placeholder?.busy ?? "Queue a message… (sends when the agent is free)")
+                ? (placeholder?.busy ?? "Queue a message… (sends at the agent's next step)")
                 : (placeholder?.idle ?? "Ask the agent to build, fix, or explain something…")
             }
             onChange={(e) => {

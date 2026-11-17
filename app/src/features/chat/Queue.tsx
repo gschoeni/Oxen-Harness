@@ -1,4 +1,6 @@
-// Messages stacked while the agent is busy; they send in order as it frees up.
+// Messages stacked while the agent is busy. Each goes to the model at the
+// turn's next step (between its tool rounds), in order; "Send now" interrupts
+// the turn so they go at once.
 // Styled as one of the in-flight panels (fleet, tasks, media) so the stack
 // above the composer reads as one column: same width, head, and row height.
 import { ListOrdered, X } from "lucide-react";
@@ -7,9 +9,13 @@ import { Button } from "../../components/ui";
 export function Queue({
   items,
   onChange,
+  onSendNow,
 }: {
   items: string[];
   onChange: (next: string[]) => void;
+  /** Interrupt the running turn so the queue sends immediately; omitted when
+   *  nothing is running to interrupt. */
+  onSendNow?: () => void;
 }) {
   if (items.length === 0) return null;
 
@@ -18,7 +24,19 @@ export function Queue({
       <div className="fleet-panel-head">
         <ListOrdered size={13} className="fleet-panel-icon" />
         <span className="fleet-panel-title">Queued · {items.length}</span>
-        <span className="fleet-panel-hint queue-note">sends automatically when the agent is free</span>
+        <span className="fleet-panel-hint queue-note">sends at the agent's next step</span>
+        {onSendNow && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="queue-send-now"
+            title="Interrupt the current step and send the queue now"
+            onClick={onSendNow}
+          >
+            Send now
+          </Button>
+        )}
         <Button type="button" size="sm" variant="outline" className="queue-clear" onClick={() => onChange([])}>
           Clear
         </Button>

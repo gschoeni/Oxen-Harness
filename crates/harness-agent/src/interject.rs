@@ -73,6 +73,16 @@ impl Interjections {
         drained
     }
 
+    /// Take back everything still undelivered — for a host whose user edited
+    /// or removed a queued message. The same drain as [`take_all`], named for
+    /// the caller's intent: nothing returned here reaches the model unless it
+    /// is pushed again.
+    ///
+    /// [`take_all`]: Self::take_all
+    pub fn retract_all(&self) -> Vec<String> {
+        self.take_all()
+    }
+
     /// How many messages are waiting.
     pub fn pending(&self) -> usize {
         self.inner.lock().expect("interjection lock").len()

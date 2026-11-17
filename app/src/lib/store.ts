@@ -36,6 +36,8 @@ import {
   cancelFleet,
   cancelTurn,
   interjectAgent,
+  interject,
+  retractInterjections,
   killBackgroundTask,
   listAgents,
   listTasks,
@@ -462,6 +464,10 @@ function addEditorTab(
 export interface QueuedPrompt {
   text: string;
   attachments: string[];
+  /** Handed to the running turn, which delivers it at its next step (between
+   *  model rounds). It stays in the queue until the backend says it landed;
+   *  unset, the prompt waits for the turn to end. */
+  steered?: boolean;
 }
 
 /** Whether a turn's error is an Oxen authentication failure (no/invalid API key),
@@ -874,6 +880,10 @@ interface AppState {
   retryBrokenTurn: (session: string, itemId: string) => void;
   /** Replace the current chat's send queue (used by the queue editor). */
   setQueue: (items: string[]) => void;
+  /** A turn began: hand it whatever is already queued for this chat. */
+  ingestTurnStarted: (session: string) => void;
+  /** A queued prompt reached the model mid-turn: move it into the thread. */
+  ingestInterjected: (e: { session: string; text: string }) => void;
   /** Route a streamed token / tool event into its session's thread. */
   ingestToken: (session: string, token: string) => void;
   /** Land any buffered streamed tokens in the store now. Every store mutation
@@ -1313,8 +1323,72 @@ export const useStore = create<AppState>((rawSet, get) => {
   // delivered once the chat goes idle (see driveTurn's settle).
   const awaitingDelivery = new Set<string>();
 
+  // ---- Queued prompts, delivered mid-turn --------------------------------
+  // A prompt queued while a turn runs is handed to that turn (`interject`),
+  // which gives it to the model at its next step — between model rounds —
+  // rather than after the whole turn. The prompt stays in the queue, marked
+  // `steered`, until the backend announces the delivery (`ingestInterjected`);
+  // the backend holds nothing across turns, so a turn's end clears the marks
+  // and whatever is left is this client's to send again.
+
+  // Which turn a chat is on, so an `interject` answered after its turn ended
+  // can't mark a prompt as handed to a turn that is gone.
+  const turnSeq = new Map<string, number>();
+  // One steering operation at a time per chat: a hand-over and a take-back
+  // racing each other could deliver a prompt the user just removed.
+  const steerChains = new Map<string, Promise<void>>();
+  function chainSteer(id: string, op: () => Promise<void>) {
+    const next = (steerChains.get(id) ?? Promise.resolve()).then(op).catch(() => {});
+    steerChains.set(id, next);
+  }
+
+  // Hand the running turn each queued prompt it can take, in order. A prompt
+  // with attachments can't be steered (the channel carries text), and holds
+  // back everything queued behind it so the order typed is the order sent.
+  async function steerQueued(id: string) {
+    for (;;) {
+      if (get().runStatus[id] !== "running") return;
+      const item = (get().queues[id] ?? []).find((q) => !q.steered);
+      if (!item || item.attachments.length > 0) return;
+      const seq = turnSeq.get(id);
+      if (!(await interject(id, item.text))) return;
+      if (turnSeq.get(id) !== seq || get().runStatus[id] !== "running") return;
+      // Gone from the queue by now means it already landed (its event beat
+      // this reply) or the user removed it (their edit's resync follows).
+      set((s) => ({
+        queues: {
+          ...s.queues,
+          [id]: (s.queues[id] ?? []).map((q) => (q === item ? { ...q, steered: true } : q)),
+        },
+      }));
+    }
+  }
+
+  // The queue was edited: take back what the turn still holds, then hand over
+  // the queue as it now stands. A steered prompt the backend no longer holds
+  // was delivered; its event removes it.
+  async function resteerQueued(id: string) {
+    if (get().runStatus[id] !== "running") return;
+    const seq = turnSeq.get(id);
+    const taken = await retractInterjections(id);
+    if (turnSeq.get(id) !== seq) return;
+    set((s) => ({
+      queues: {
+        ...s.queues,
+        [id]: (s.queues[id] ?? []).map((q) => {
+          const i = q.steered ? taken.indexOf(q.text) : -1;
+          if (i < 0) return q;
+          taken.splice(i, 1);
+          return { ...q, steered: false };
+        }),
+      },
+    }));
+    await steerQueued(id);
+  }
+
   function driveTurn(id: string, text: string, paths: string[], how: "fresh" | "retry" | "deliver") {
     lastActive.set(id, Date.now());
+    turnSeq.set(id, (turnSeq.get(id) ?? 0) + 1);
     set((s) => ({
       runStatus: { ...s.runStatus, [id]: "running" },
       // Clear any stale live estimate so this turn's meter starts from the
@@ -1356,6 +1430,13 @@ export const useStore = create<AppState>((rawSet, get) => {
         }));
         get().refreshHistory(); // the first turn gives a new session its title
         get().refreshTotalTokens(); // the turn bumped the all-time total
+        // The turn is over and the backend kept nothing it didn't deliver:
+        // a prompt still marked steered goes out below like any queued one.
+        set((s) =>
+          (s.queues[id] ?? []).some((q) => q.steered)
+            ? { queues: { ...s.queues, [id]: (s.queues[id] ?? []).map((q) => ({ ...q, steered: false })) } }
+            : {},
+        );
         // While a recovery card is up (missing key, out of credits), hold the
         // queue: draining it would just hit the same error. The card's action
         // retries this turn, then the queue flows.
@@ -1964,6 +2045,7 @@ export const useStore = create<AppState>((rawSet, get) => {
             if (q.length >= MAX_QUEUE) return {};
             return { queues: { ...s.queues, [id]: [...q, prompt] } };
           });
+          chainSteer(id, () => steerQueued(id));
           return;
         }
         runTurnFor(id, full, attachments);
@@ -2390,10 +2472,34 @@ export const useStore = create<AppState>((rawSet, get) => {
       driveTurn(session, item.text, item.attachments, "retry");
     },
 
-    setQueue: (items) =>
+    setQueue: (items) => {
+      const id = get().session?.session_id;
+      if (!id) return;
+      set((s) => ({ queues: { ...s.queues, [id]: reconcileQueueTexts(s.queues[id], items) } }));
+      chainSteer(id, () => resteerQueued(id));
+    },
+
+    ingestTurnStarted: (session) => chainSteer(session, () => steerQueued(session)),
+
+    ingestInterjected: ({ session: id, text }) =>
       set((s) => {
-        const id = s.session?.session_id;
-        return id ? { queues: { ...s.queues, [id]: reconcileQueueTexts(s.queues[id], items) } } : {};
+        const queue = s.queues[id] ?? [];
+        // Delivery is first-in-first-out, so it is the oldest steered prompt
+        // with this text; the looser matches cover a delivery that beat its
+        // own hand-over reply, and text the backend clipped.
+        let at = queue.findIndex((q) => q.steered && q.text === text);
+        if (at < 0) at = queue.findIndex((q) => q.text === text);
+        if (at < 0) at = queue.findIndex((q) => q.steered);
+        const thread = s.threads[id];
+        return {
+          queues: at < 0 ? s.queues : { ...s.queues, [id]: queue.filter((_, i) => i !== at) },
+          // The reply so far ends here; the prompt lands where the model saw
+          // it and a fresh bubble opens for what the model says next.
+          threads:
+            thread === undefined
+              ? s.threads
+              : { ...s.threads, [id]: startTurn(finalizeAssistant(thread, ""), text) },
+        };
       }),
 
     ingestToken: (session, token) => {

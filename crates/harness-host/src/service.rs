@@ -2358,9 +2358,11 @@ impl SessionService {
     ///
     /// A message [`Self::interject`] accepted in the instant *after* the turn
     /// loop's final drain would otherwise be stranded in the agent's buffer
-    /// (and lost entirely if the agent is then evicted) — so after a
-    /// successful turn, any leftover steering runs as its own follow-up turn,
-    /// which is what its sender was promised by `accepted: true`.
+    /// (and lost entirely if the agent is then evicted) — so after a turn
+    /// that ended cleanly, any leftover steering runs as its own follow-up
+    /// turn, which is what its sender was promised by `accepted: true`. A
+    /// *stopped* turn ends cleanly too, which is what makes "send now" work:
+    /// cancel the turn and whatever was queued for it runs at once.
     async fn execute_turn(&self, session: &str, kind: TurnKind) -> Result<String, String> {
         let mut kind = kind;
         loop {
@@ -2368,14 +2370,22 @@ impl SessionService {
             match result {
                 Ok(text) if leftovers.is_empty() => return Ok(text),
                 Ok(_) => {
+                    // Each is about to reach the model as the follow-up
+                    // turn's prompt: announce it like a mid-turn delivery, so
+                    // a client tracks one kind of event either way.
+                    for text in &leftovers {
+                        self.sink.emit(ProtocolEvent::Interjected {
+                            session: session.to_string(),
+                            text: text.clone(),
+                        });
+                    }
                     kind = TurnKind::Fresh {
                         prompt: leftovers.join("\n\n"),
                         attachments: Vec::new(),
                     };
                 }
-                // On a failed or cancelled turn the leftovers stay in the
-                // agent's buffer (see below): a cached agent delivers them at
-                // the next turn's first drain; only eviction loses them.
+                // A failed turn dropped whatever it had not delivered (see
+                // `execute_one_turn`); the sender still holds it.
                 Err(e) => return Err(e),
             }
         }
@@ -2385,7 +2395,9 @@ impl SessionService {
     /// plus any interjections still undelivered after a *successful* turn —
     /// drained here, while the agent is guaranteed alive, because
     /// `evict_idle` below may drop the agent (and its buffer) for background
-    /// chats. A failed turn leaves them buffered for the next turn instead.
+    /// chats. A failed turn drops them: no `turn.interjected` was sent, so
+    /// the client knows they are still its to send, and a copy left in the
+    /// buffer would reach the model a second time when it does.
     async fn execute_one_turn(
         &self,
         session: &str,
@@ -2497,8 +2509,9 @@ impl SessionService {
         // After a successful turn, claim any steering that landed after the
         // final drain — before evict_idle below can drop the buffer with the
         // agent. The caller runs it as its own follow-up turn.
+        let undelivered = steer.take_all();
         let leftovers = if result.is_ok() {
-            steer.take_all()
+            undelivered
         } else {
             Vec::new()
         };
@@ -2594,6 +2607,18 @@ impl SessionService {
                 true
             }
             None => false,
+        }
+    }
+
+    /// Take back every message [`Self::interject`] accepted that the running
+    /// turn has not delivered yet (no `turn.interjected` for it), in order —
+    /// for a client whose user edited, reordered, or removed something
+    /// queued: retract, then interject what should still go. Empty when no
+    /// turn is running or nothing is waiting.
+    pub async fn retract_interjections(&self, session: &str) -> Vec<String> {
+        match self.interjections.lock().await.get(session) {
+            Some(handle) => handle.retract_all(),
+            None => Vec::new(),
         }
     }
 

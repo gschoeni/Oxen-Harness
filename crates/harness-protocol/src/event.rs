@@ -227,6 +227,12 @@ pub enum ProtocolEvent {
     /// The turn ended in an error (auth failure, exhausted retries, …).
     #[serde(rename = "turn.failed")]
     TurnFailed { session: String, error: String },
+    /// A message sent with `…/interject` just reached the model: it is in
+    /// the transcript and the next round answers it. Until this arrives the
+    /// message is only queued — a client shows it as pending and may still
+    /// take it back.
+    #[serde(rename = "turn.interjected")]
+    Interjected { session: String, text: String },
     /// Background work (a `wait: false` generation or fleet, a background
     /// shell task) finished and is waiting to reach the model. A running turn
     /// picks it up on its own; an idle chat needs the client to call the
@@ -479,6 +485,7 @@ impl ProtocolEvent {
             Self::TurnStarted { .. } => "turn.started",
             Self::TurnCompleted { .. } => "turn.completed",
             Self::TurnFailed { .. } => "turn.failed",
+            Self::Interjected { .. } => "turn.interjected",
             Self::DeliveryReady { .. } => "turn.delivery_ready",
             Self::Question { .. } => "agent.question",
             Self::ApprovalRequest { .. } => "agent.approval_request",
@@ -532,6 +539,7 @@ impl ProtocolEvent {
             | Self::TurnStarted { session }
             | Self::TurnCompleted { session, .. }
             | Self::TurnFailed { session, .. }
+            | Self::Interjected { session, .. }
             | Self::DeliveryReady { session }
             | Self::Question { session, .. }
             | Self::ApprovalRequest { session, .. }

@@ -129,6 +129,16 @@ pub(crate) async fn run_prompt(
                     next = Some(crate::turn::TurnRequest::Prompt(msg));
                 }
             }
+            TurnOutcome::SendNow(msg) => {
+                let mut s = state.borrow_mut();
+                s.print_line(&format!(
+                    "  {} {}",
+                    ui.brown("▶ interrupted — sending now:"),
+                    ui.cream(&truncate(msg.lines().next().unwrap_or(&msg), 80)),
+                ));
+                s.render();
+                next = Some(crate::turn::TurnRequest::Prompt(msg));
+            }
             TurnOutcome::Exit => {
                 exit = true;
                 break;
@@ -488,6 +498,9 @@ enum TurnOutcome {
     /// Ctrl-C — cancel this turn and its queued drain; the session continues
     /// at the idle prompt.
     Interrupted,
+    /// A bare ⏎ while messages waited on the turn's next step: the turn was
+    /// cut short so they run now, as this prompt, instead of waiting for it.
+    SendNow(String),
     /// Ctrl-D on an empty composer — end the session.
     Exit,
 }
@@ -598,7 +611,17 @@ async fn run_one_turn(
                                 let trimmed = line.trim();
                                 let mut s = state.borrow_mut();
                                 if trimmed.is_empty() {
-                                    // Nothing to send.
+                                    // A bare ⏎ with messages still waiting on
+                                    // the turn's next step sends them now: the
+                                    // turn ends here and they run as the next
+                                    // prompt. (A lane's messages are its own —
+                                    // only the main turn's count.)
+                                    let waiting = interject.take_all();
+                                    if !waiting.is_empty() {
+                                        s.finish();
+                                        s.end_elapsed();
+                                        return TurnOutcome::SendNow(waiting.join("\n\n"));
+                                    }
                                 } else if stackable(trimmed) {
                                     // Steer the running turn — or, while a
                                     // fleet lane is being watched (↑/↓, alt+digit),
@@ -617,17 +640,23 @@ async fn run_one_turn(
                                         }
                                         None => {
                                             interject.push(expand_pastes(trimmed));
-                                            "🗣 steering:".to_string()
+                                            "🗣 queued for the next step:".to_string()
                                         }
                                     };
+                                    let to_main = target.starts_with("🗣 queued");
                                     let ui = s.ui.clone();
                                     s.print_line(&format!(
-                                        "  {} {}",
+                                        "  {} {}{}",
                                         ui.brown(&target),
                                         ui.cream(&truncate(
                                             trimmed.split('\n').next().unwrap_or(trimmed),
                                             80
                                         )),
+                                        if to_main {
+                                            ui.dim("  · ⏎ again to send now")
+                                        } else {
+                                            String::new()
+                                        },
                                     ));
                                 } else {
                                     // A /command can't stack — the queue drains

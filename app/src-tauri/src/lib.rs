@@ -192,6 +192,8 @@ pub fn run() -> Result<(), tauri::Error> {
                 commands::turn::cancel_fleet,
                 commands::turn::cancel_agent,
                 commands::turn::interject_agent,
+                commands::turn::interject,
+                commands::turn::retract_interjections,
                 commands::turn::list_tasks,
                 commands::turn::kill_background_task,
                 commands::study::study_profile,

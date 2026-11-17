@@ -423,9 +423,12 @@ While the agent is thinking, streaming, or running tools, the composer stays
 live. What you type goes one of two ways:
 
 - **Enter steers** — the message is delivered *into* the running turn at its
-  next safe point, so a "no, the other file" lands mid-work. If a shell
-  command is in the way, it moves to the background at once and its result
-  is delivered to the model when it finishes.
+  next safe point (between model rounds), so a "no, the other file" lands
+  mid-work; a `🗣 sent:` line marks the moment it reaches the model. If a
+  shell command is in the way, it moves to the background at once and its
+  result is delivered to the model when it finishes. Can't wait for the next
+  step? **Enter again** on the empty composer interrupts the turn and sends
+  what's waiting right now.
 - **Ctrl+Q (or Ctrl+Enter) queues** — the message runs *after* this turn
   (the prompt shows the depth: `[2 queued] ❯`). Queued messages render as a
   navigable list above the composer: **↑** steps into it, **Enter**/**e**

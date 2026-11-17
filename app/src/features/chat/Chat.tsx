@@ -271,7 +271,7 @@ export function Chat() {
       <FleetPanel />
       <TasksPanel />
       <MediaPanel />
-      <Queue items={queue} onChange={setQueue} />
+      <Queue items={queue} onChange={setQueue} onSendNow={running ? stop : undefined} />
       {snippets.length > 0 && (
         <div className="attachments">
           {snippets.map((sn, i) => (

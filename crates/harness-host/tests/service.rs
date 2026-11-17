@@ -359,6 +359,147 @@ async fn a_chat_mid_turn_refuses_a_model_switch() {
     let _ = turn.await.unwrap();
 }
 
+/// Park a turn on its scripted question, so the chat is reliably mid-turn;
+/// returns the running turn and the question's id.
+async fn park_on_question(
+    service: &Arc<SessionService>,
+    sink: &Arc<CollectingSink>,
+    session: &str,
+) -> (tokio::task::JoinHandle<Result<String, String>>, String) {
+    let turn = tokio::spawn({
+        let service = service.clone();
+        let session = session.to_string();
+        async move { service.run_turn(&session, "ask me".into(), vec![]).await }
+    });
+    let id = wait_for(sink, || {
+        sink.events().into_iter().find_map(|e| match e {
+            ProtocolEvent::Question { id, .. } => Some(id),
+            _ => None,
+        })
+    })
+    .await;
+    (turn, id)
+}
+
+fn position(events: &[ProtocolEvent], f: impl Fn(&ProtocolEvent) -> bool) -> usize {
+    events
+        .iter()
+        .position(f)
+        .unwrap_or_else(|| panic!("event not found in {events:#?}"))
+}
+
+/// A message queued while the turn works reaches the model at the turn's
+/// next step — the request right after the tool round carries it — and the
+/// client is told the moment it lands, inside the same turn.
+#[tokio::test]
+async fn a_queued_message_reaches_the_model_between_rounds_not_after_the_turn() {
+    let mut server = mockito::Server::new_async().await;
+    // The round after the question must carry the queued message.
+    let next_round = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::Regex("also add an index".into()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(FINAL_SSE)
+        .expect(1)
+        .create();
+    let _ask = sse_mock(&mut server, ASK_SSE);
+
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+    let session = service.new_session().await.unwrap().session_id;
+    let (turn, question) = park_on_question(&service, &sink, &session).await;
+
+    assert!(service.interject(&session, "also add an index").await);
+    service.answer_question(
+        &question,
+        vec![QuestionAnswer {
+            header: "Storage".into(),
+            question: "Which DB?".into(),
+            selected: vec!["SQLite".into()],
+        }],
+    );
+    assert_eq!(turn.await.unwrap().unwrap(), "The sum is 5.");
+    next_round.assert_async().await;
+
+    let events = sink.events();
+    let delivered = position(&events, |e| {
+        matches!(e, ProtocolEvent::Interjected { session: s, text }
+            if *s == session && text == "also add an index")
+    });
+    let tool_done = position(&events, |e| {
+        matches!(
+            e,
+            ProtocolEvent::Tool {
+                phase: ToolPhase::End,
+                ..
+            }
+        )
+    });
+    let completed = position(&events, |e| {
+        matches!(e, ProtocolEvent::TurnCompleted { .. })
+    });
+    assert!(tool_done < delivered && delivered < completed);
+    let turns = events
+        .iter()
+        .filter(|e| matches!(e, ProtocolEvent::TurnStarted { .. }))
+        .count();
+    assert_eq!(turns, 1, "delivered inside the running turn");
+    // With no turn running there is nothing to steer.
+    assert!(!service.interject(&session, "too late").await);
+}
+
+/// "Send now": stopping the turn runs what was queued for it at once, as its
+/// own turn — and a message taken back before then never reaches the model.
+#[tokio::test]
+async fn stopping_a_turn_sends_what_was_queued_right_away() {
+    let mut server = mockito::Server::new_async().await;
+    let sent_now = server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::Regex("go now".into()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(FINAL_SSE)
+        .expect(1)
+        .create();
+    let _ask = sse_mock(&mut server, ASK_SSE);
+
+    let sink = Arc::new(CollectingSink::default());
+    let workspace = tempfile::tempdir().unwrap();
+    let service = service_for(server.url(), sink.clone(), workspace.path());
+    let session = service.new_session().await.unwrap().session_id;
+    let (turn, _question) = park_on_question(&service, &sink, &session).await;
+
+    assert!(service.interject(&session, "an idea I dropped").await);
+    assert_eq!(
+        service.retract_interjections(&session).await,
+        vec!["an idea I dropped"]
+    );
+    assert!(service.interject(&session, "go now").await);
+
+    service.cancel_turn(&session).await;
+    assert_eq!(turn.await.unwrap().unwrap(), "The sum is 5.");
+    sent_now.assert_async().await;
+
+    let events = sink.events();
+    let delivered = position(
+        &events,
+        |e| matches!(e, ProtocolEvent::Interjected { text, .. } if text == "go now"),
+    );
+    let starts: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| matches!(e, ProtocolEvent::TurnStarted { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(starts.len(), 2, "the queued message ran as its own turn");
+    assert!(starts[0] < delivered && delivered < starts[1]);
+    let transcript = serde_json::to_string(&service.session_messages(&session).unwrap()).unwrap();
+    assert!(transcript.contains("go now"));
+    assert!(!transcript.contains("an idea I dropped"), "{transcript}");
+}
+
 /// The composer's permission picker: the switch belongs to one chat, takes
 /// effect while its turn is parked (the gate is read per tool call), and is
 /// never written to `permissions.json` — the desktop form of `--yolo`.

@@ -17,6 +17,16 @@ describe("Queue", () => {
     expect(screen.getByText("2")).toHaveClass("queue-idx");
   });
 
+  it("offers to send the queue now only while a turn is running", () => {
+    const onSendNow = vi.fn();
+    const { rerender } = render(<Queue items={["first"]} onChange={() => {}} />);
+    expect(screen.queryByRole("button", { name: "Send now" })).toBeNull();
+
+    rerender(<Queue items={["first"]} onChange={() => {}} onSendNow={onSendNow} />);
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    expect(onSendNow).toHaveBeenCalledOnce();
+  });
+
   it("removes one message or clears them all", () => {
     const onChange = vi.fn();
     render(<Queue items={["first", "second"]} onChange={onChange} />);
