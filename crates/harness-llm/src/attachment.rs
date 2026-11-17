@@ -382,7 +382,7 @@ impl Attachment {
 }
 
 /// The project-relative path a video/audio note says its file was saved at
-/// (see [`Attachment::media_note`]); `None` for any other text.
+/// (see `Attachment::media_note`); `None` for any other text.
 pub fn saved_media_path(note: &str) -> Option<&str> {
     let rest = note
         .strip_prefix("[Attached video `")
