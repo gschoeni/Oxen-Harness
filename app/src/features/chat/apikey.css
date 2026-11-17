@@ -14,6 +14,9 @@
   border-radius: var(--frame-radius);
   padding: var(--space-4);
   animation: apikey-in var(--dur) var(--ease);
+  /* The header icon's box: also how far the action row indents to sit under
+     the title, so the two can't drift apart. */
+  --apikey-icon: 28px;
 }
 /* The same card in the empty chat, asked for up front: centred under the
    hero, where the example prompts would be. */
@@ -38,8 +41,8 @@
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: var(--apikey-icon);
+  height: var(--apikey-icon);
   border-radius: var(--radius-pill);
   color: var(--on-accent);
   background: var(--accent);
@@ -159,7 +162,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  padding-left: calc(28px + var(--space-3));
+  padding-left: calc(var(--apikey-icon) + var(--space-3));
 }
 .retry-actions a.btn {
   text-decoration: none;
