@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CreditCard, RotateCcw } from "lucide-react";
+import { CreditCard, ExternalLink, RotateCcw } from "lucide-react";
 import { Button } from "../../components/ui";
 import { getConnection } from "../../lib/ipc";
 import { isCreditsError, useStore } from "../../lib/store";
@@ -42,43 +42,43 @@ export function RetryPrompt({ item }: { item: RetryItem }) {
           <div className="apikey-title">
             {credits ? "Out of Oxen credits" : "Continue this chat"}
           </div>
+          {/* The title already says what a 402 means, so the raw provider
+              line stays behind "View error details". */}
           <div className="apikey-sub">
-            {item.message}
-            {credits
-              ? " Add credits to your account, then pick up right where you left off."
-              : " Nothing is lost — retry as-is, or switch models or check your connection first, then pick up right where you left off."}
+            {credits ? (
+              <>
+                Add credits at <code className="apikey-host">{host || "hub.oxen.ai"}</code>, then
+                retry. This chat picks up right where it left off.
+              </>
+            ) : (
+              `${item.message} Nothing is lost — retry as-is, or switch models or check your connection first, then pick up right where you left off.`
+            )}
           </div>
         </div>
       </div>
 
       <div className="retry-actions">
         {credits && (
-          <a className="retry-add-credits" href={`${hubUrl}/settings`} target="_blank" rel="noreferrer">
+          <a className="btn primary sm" href={`${hubUrl}/settings`} target="_blank" rel="noreferrer">
             Add credits
+            <ExternalLink size={14} />
           </a>
         )}
         <Button
-          variant="primary"
+          variant={credits ? "outline" : "primary"}
           size="sm"
           disabled={!sessionId || running}
           onClick={() => sessionId && retryBrokenTurn(sessionId, item.id)}
         >
-          {credits ? "I’ve added credits — retry" : "Continue"}
-          <RotateCcw size={15} />
+          <RotateCcw size={14} />
+          {credits ? "Retry" : "Continue"}
         </Button>
-        <button type="button" className="apikey-link" onClick={() => setDetails(true)}>
+        <button type="button" className="retry-details" onClick={() => setDetails(true)}>
           View error details
         </button>
       </div>
       {details && (
         <ModelErrorModal error={item.lastError} final={item.message} onClose={() => setDetails(false)} />
-      )}
-
-      {credits && (
-        <div className="apikey-foot">
-          Manage billing at <code>{host || "hub.oxen.ai"}/settings</code>. Retrying continues this
-          conversation — nothing is lost.
-        </div>
       )}
     </div>
   );

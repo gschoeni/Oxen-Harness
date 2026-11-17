@@ -514,6 +514,8 @@ describe("Chat", () => {
     // It links to the connected hub to add credits.
     const link = screen.getByRole("link", { name: /add credits/i });
     expect(link).toHaveAttribute("href", "https://hub.oxen.ai/settings");
+    // The title carries the meaning; the raw provider line waits in the details.
+    expect(screen.queryByText(/Oxen API error \(402\)/)).toBeNull();
     // The turn settled to idle so the composer isn't stuck "busy".
     await waitFor(() => expect(useStore.getState().runStatus["s1"]).toBeUndefined());
 
